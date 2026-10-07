@@ -376,5 +376,3 @@ func TestDSNInjectionDefense(t *testing.T) {
 		t.Errorf("parsed DSN values mismatch: %+v", cfg)
 	}
 }
-
-

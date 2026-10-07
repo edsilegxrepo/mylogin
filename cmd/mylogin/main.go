@@ -21,6 +21,7 @@ import (
 
 const (
 	exitSuccess     = 0
+	exitGeneral     = 1
 	exitUsage       = 2
 	exitFileError   = 3
 	exitFormatError = 4
@@ -314,4 +315,3 @@ func main() {
 
 	os.Exit(exitSuccess)
 }
-const exitGeneral = 1
