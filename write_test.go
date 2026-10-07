@@ -2,100 +2,52 @@ package mylogin_test
 
 import (
 	"bytes"
-	"fmt"
-	"io"
 	"os"
-	"sort"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/edsilegxrepo/myloginpath"
 )
 
-type fileInfoByName []os.FileInfo
-
-func (s fileInfoByName) Len() int           { return len(s) }
-func (s fileInfoByName) Less(i, j int) bool { return s[i].Name() < s[j].Name() }
-func (s fileInfoByName) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
-
-func iterDir(path string, filter func(os.FileInfo) bool) (chan string, error) {
-	if filter == nil {
-		filter = func(os.FileInfo) bool { return true }
-	}
-	dir, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer dir.Close()
-	files, err := dir.Readdir(-1)
-	if err != nil {
-		return nil, err
-	}
-	c := make(chan string)
-	go func() {
-		sort.Sort(fileInfoByName(files))
-		// Ignore write on closed channel
-		defer func() {
-			// FIXME
-			_ = recover()
-		}()
-		for _, fileinfo := range files {
-			if !filter(fileinfo) {
-				continue
-			}
-			c <- fmt.Sprintf("%s%c%s", path, os.PathSeparator, fileinfo.Name())
-		}
-		close(c)
-	}()
-	return c, nil
-}
-
+// TestReadWrite verifies that every official MySQL-generated binary fixture in testdata/
+// decodes and re-encodes with 100% byte-for-byte exact equality.
+// This validates AES-128-ECB PKCS#7 padding across all 16 byte boundaries (padding01-16.cnf)
+// and diverse 100-bit keys (0-e.cnf).
 func TestReadWrite(t *testing.T) {
-	files, err := iterDir("testdata", func(f os.FileInfo) bool {
-		return f.Mode().IsRegular() && strings.HasSuffix(f.Name(), ".cnf")
-	})
+	entries, err := os.ReadDir("testdata")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("failed to read testdata directory: %v", err)
 	}
 
-	var orig bytes.Buffer
-	var out bytes.Buffer
-
-	for path := range files {
-		t.Log(path)
-		f, err := os.Open(path)
-		if err != nil {
-			t.Errorf("%s: %s", path, err)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".cnf") {
 			continue
 		}
-		func() {
-			defer f.Close()
-			orig.Reset()
-			out.Reset()
-			io.Copy(&orig, f)
 
-			origBytes := orig.Bytes()
-			content, err := mylogin.Decode(bytes.NewBuffer(orig.Bytes()))
+		name := entry.Name()
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join("testdata", name)
+			origBytes, err := os.ReadFile(path)
 			if err != nil {
-				t.Errorf("%s: %s", path, err)
-				return
+				t.Fatalf("os.ReadFile(%s) failed: %v", path, err)
 			}
-			err = mylogin.Encode(&out, content)
+
+			content, err := mylogin.Decode(bytes.NewReader(origBytes))
 			if err != nil {
-				t.Errorf("%s: %s", path, err)
-				return
+				t.Fatalf("Decode(%s) failed: %v", path, err)
 			}
+
+			var out bytes.Buffer
+			if err := mylogin.Encode(&out, content); err != nil {
+				t.Fatalf("Encode(%s) failed: %v", path, err)
+			}
+
 			outBytes := out.Bytes()
-			if bytes.Equal(origBytes, outBytes) {
-				t.Logf("%s: OK", path)
-				return
+			if !bytes.Equal(origBytes, outBytes) {
+				t.Fatalf("%s: content differs: orig=%d bytes, out=%d bytes", path, len(origBytes), len(outBytes))
 			}
-			t.Errorf("%s: content differ", path)
-			if len(outBytes) != len(origBytes) {
-				t.Logf("orig: %d bytes", len(origBytes))
-				t.Logf("out:  %d bytes", len(outBytes))
-			}
-
-		}()
+		})
 	}
 }
