@@ -5,9 +5,9 @@ bin/
 *.dll
 *.so
 *.dylib
-mylogin
-mylogin-dsn
-mylogin-key
+/mylogin
+/mylogin-dsn
+/mylogin-key
 
 # Test and Coverage Artifacts
 *.test

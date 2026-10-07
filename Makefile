@@ -1,6 +1,6 @@
 BIN_DIR := bin
 GO ?= go
-VERSION ?= $(shell cat version.txt 2>/dev/null || echo "2.0.0")
+VERSION ?= $(shell cat version.txt 2>/dev/null || echo "dev")
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
 .PHONY: all build test test-integration coverage vet fmt clean help

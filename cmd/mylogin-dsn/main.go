@@ -17,7 +17,7 @@ const (
 	exitNotFound    = 5
 )
 
-var version = "2.0.0"
+var version = "dev"
 
 func run(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("mylogin-dsn", flag.ContinueOnError)
