@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/edsilegxrepo/myloginpath"
@@ -16,41 +17,51 @@ const (
 	exitNotFound    = 5
 )
 
-func main() {
+func run(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("mylogin-dsn", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
 	var (
 		database string
 		filename string
 	)
-	flag.StringVar(&database, "database", "", "database name to append to DSN")
-	flag.StringVar(&filename, "file", mylogin.DefaultFile(), "path to .mylogin.cnf")
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [-file <path>] [-database <dbname>] [<section> ...]\n", os.Args[0])
-		flag.PrintDefaults()
+	flags.StringVar(&database, "database", "", "database name to append to DSN")
+	flags.StringVar(&filename, "file", mylogin.DefaultFile(), "path to .mylogin.cnf")
+	flags.Usage = func() {
+		fmt.Fprintf(stderr, "Usage: mylogin-dsn [-file <path>] [-database <dbname>] [<section> ...]\n")
+		flags.PrintDefaults()
 	}
-	flag.Parse()
+
+	if err := flags.Parse(args); err != nil {
+		return exitUsage
+	}
 
 	var sections []string
-	if flag.NArg() == 0 {
+	if flags.NArg() == 0 {
 		sections = []string{mylogin.DefaultSection}
 	} else {
-		sections = flag.Args()
+		sections = flags.Args()
 	}
 
 	login, err := mylogin.ReadLogin(filename, sections)
 	if err != nil {
 		if os.IsNotExist(err) || os.IsPermission(err) {
-			fmt.Fprintf(os.Stderr, "mylogin-dsn: file error: %v\n", err)
-			os.Exit(exitFileError)
+			fmt.Fprintf(stderr, "mylogin-dsn: file error: %v\n", err)
+			return exitFileError
 		}
-		fmt.Fprintf(os.Stderr, "mylogin-dsn: decryption/parse error: %v\n", err)
-		os.Exit(exitFormatError)
+		fmt.Fprintf(stderr, "mylogin-dsn: decryption/parse error: %v\n", err)
+		return exitFormatError
 	}
 
 	if login.IsEmpty() {
-		fmt.Fprintf(os.Stderr, "mylogin-dsn: no credentials found for sections: %v\n", sections)
-		os.Exit(exitNotFound)
+		fmt.Fprintf(stderr, "mylogin-dsn: no credentials found for sections: %v\n", sections)
+		return exitNotFound
 	}
 
-	fmt.Println(login.FormatDSN(database))
-	os.Exit(exitSuccess)
+	fmt.Fprintln(stdout, login.FormatDSN(database))
+	return exitSuccess
+}
+
+func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }

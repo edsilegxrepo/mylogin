@@ -210,9 +210,12 @@ func (f *formatTemplateLn) Set(s string) error {
 	return f.formatTemplate.Set(s + "\n")
 }
 
-func main() {
+func run(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("mylogin", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
 	var filename string
-	flag.StringVar(&filename, "file", mylogin.DefaultFile(), "mylogin.cnf path")
+	flags.StringVar(&filename, "file", mylogin.DefaultFile(), "mylogin.cnf path")
 
 	formats := []outputFormat{
 		&formatReplay{},
@@ -224,10 +227,12 @@ func main() {
 
 	for _, fmtFlag := range formats {
 		name, usage := fmtFlag.Help()
-		flag.Var(fmtFlag, name, usage)
+		flags.Var(fmtFlag, name, usage)
 	}
 
-	flag.Parse()
+	if err := flags.Parse(args); err != nil {
+		return exitUsage
+	}
 
 	var selectedFormat outputFormat
 	for _, ft := range formats {
@@ -238,49 +243,49 @@ func main() {
 		if selectedFormat != nil {
 			h1, _ := ft.Help()
 			h2, _ := selectedFormat.Help()
-			fmt.Fprintf(os.Stderr, "mylogin: options -%s and -%s are mutually exclusive.\n", h1, h2)
-			os.Exit(exitUsage)
+			fmt.Fprintf(stderr, "mylogin: options -%s and -%s are mutually exclusive.\n", h1, h2)
+			return exitUsage
 		}
 		selectedFormat = ft
 	}
 
 	if selectedFormat != nil {
-		if flag.NArg() != 0 {
-			for _, name := range flag.Args() {
+		if flags.NArg() != 0 {
+			for _, name := range flags.Args() {
 				login, err := mylogin.ReadLogin(filename, []string{name})
 				if err != nil {
 					if os.IsNotExist(err) || os.IsPermission(err) {
-						fmt.Fprintf(os.Stderr, "mylogin: file error: %v\n", err)
-						os.Exit(exitFileError)
+						fmt.Fprintf(stderr, "mylogin: file error: %v\n", err)
+						return exitFileError
 					}
-					fmt.Fprintf(os.Stderr, "mylogin: decryption/parse error: %v\n", err)
-					os.Exit(exitFormatError)
+					fmt.Fprintf(stderr, "mylogin: decryption/parse error: %v\n", err)
+					return exitFormatError
 				}
 				if login.IsEmpty() {
-					fmt.Fprintf(os.Stderr, "mylogin: section %q does not exist\n", name)
-					os.Exit(exitNotFound)
+					fmt.Fprintf(stderr, "mylogin: section %q does not exist\n", name)
+					return exitNotFound
 				}
 
-				if err := selectedFormat.Print(os.Stdout, &mylogin.Section{Name: name, Login: *login}); err != nil {
-					fmt.Fprintf(os.Stderr, "mylogin: print error: %v\n", err)
-					os.Exit(exitGeneral)
+				if err := selectedFormat.Print(stdout, &mylogin.Section{Name: name, Login: *login}); err != nil {
+					fmt.Fprintf(stderr, "mylogin: print error: %v\n", err)
+					return exitGeneral
 				}
 			}
 		} else {
 			sections, err := mylogin.ReadSections(filename)
 			if err != nil {
 				if os.IsNotExist(err) || os.IsPermission(err) {
-					fmt.Fprintf(os.Stderr, "mylogin: file error: %v\n", err)
-					os.Exit(exitFileError)
+					fmt.Fprintf(stderr, "mylogin: file error: %v\n", err)
+					return exitFileError
 				}
-				fmt.Fprintf(os.Stderr, "mylogin: decryption/parse error: %v\n", err)
-				os.Exit(exitFormatError)
+				fmt.Fprintf(stderr, "mylogin: decryption/parse error: %v\n", err)
+				return exitFormatError
 			}
 
 			for i := range sections {
-				if err := selectedFormat.Print(os.Stdout, &sections[i]); err != nil {
-					fmt.Fprintf(os.Stderr, "mylogin: print error: %v\n", err)
-					os.Exit(exitGeneral)
+				if err := selectedFormat.Print(stdout, &sections[i]); err != nil {
+					fmt.Fprintf(stderr, "mylogin: print error: %v\n", err)
+					return exitGeneral
 				}
 			}
 		}
@@ -288,30 +293,34 @@ func main() {
 		file, err := os.Open(filename)
 		if err != nil {
 			if os.IsNotExist(err) || os.IsPermission(err) {
-				fmt.Fprintf(os.Stderr, "mylogin: file error: %v\n", err)
-				os.Exit(exitFileError)
+				fmt.Fprintf(stderr, "mylogin: file error: %v\n", err)
+				return exitFileError
 			}
-			fmt.Fprintf(os.Stderr, "mylogin: error: %v\n", err)
-			os.Exit(exitFileError)
+			fmt.Fprintf(stderr, "mylogin: error: %v\n", err)
+			return exitFileError
 		}
 		defer file.Close()
 
 		f, err := mylogin.Decode(bufio.NewReader(file))
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "mylogin: decode error: %v\n", err)
-			os.Exit(exitFormatError)
+			fmt.Fprintf(stderr, "mylogin: decode error: %v\n", err)
+			return exitFormatError
 		}
 		rd := f.PlainText()
 
-		if flag.NArg() > 0 {
-			rd = mylogin.FilterSection(rd, flag.Arg(0))
+		if flags.NArg() > 0 {
+			rd = mylogin.FilterSection(rd, flags.Arg(0))
 		}
 
-		if _, err := io.Copy(os.Stdout, rd); err != nil {
-			fmt.Fprintf(os.Stderr, "mylogin: output error: %v\n", err)
-			os.Exit(exitGeneral)
+		if _, err := io.Copy(stdout, rd); err != nil {
+			fmt.Fprintf(stderr, "mylogin: output error: %v\n", err)
+			return exitGeneral
 		}
 	}
 
-	os.Exit(exitSuccess)
+	return exitSuccess
+}
+
+func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }

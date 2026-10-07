@@ -50,16 +50,20 @@ func printKey(w io.Writer, key mylogin.Key) {
 		b64)
 }
 
-func main() {
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [<file> ...]\n", os.Args[0])
-		flag.PrintDefaults()
+func run(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("mylogin-key", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.Usage = func() {
+		fmt.Fprintf(stderr, "Usage: mylogin-key [<file> ...]\n")
+		flags.PrintDefaults()
 	}
-	flag.Parse()
+	if err := flags.Parse(args); err != nil {
+		return exitUsage
+	}
 
 	var filenames []string
-	if flag.NArg() > 0 {
-		filenames = flag.Args()
+	if flags.NArg() > 0 {
+		filenames = flags.Args()
 	} else {
 		filenames = []string{mylogin.DefaultFile()}
 	}
@@ -68,7 +72,7 @@ func main() {
 	for _, filename := range filenames {
 		f, err := os.Open(filename)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "mylogin-key: cannot open %s: %v\n", filename, err)
+			fmt.Fprintf(stderr, "mylogin-key: cannot open %s: %v\n", filename, err)
 			hadError = true
 			continue
 		}
@@ -76,16 +80,20 @@ func main() {
 		file, err := mylogin.Decode(bufio.NewReader(f))
 		f.Close()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "mylogin-key: decode failed for %s: %v\n", filename, err)
+			fmt.Fprintf(stderr, "mylogin-key: decode failed for %s: %v\n", filename, err)
 			hadError = true
 			continue
 		}
 
-		printKey(os.Stdout, file.Key())
+		printKey(stdout, file.Key())
 	}
 
 	if hadError {
-		os.Exit(exitFileError)
+		return exitFileError
 	}
-	os.Exit(exitSuccess)
+	return exitSuccess
+}
+
+func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }

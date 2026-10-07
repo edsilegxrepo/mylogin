@@ -3,7 +3,6 @@ package mylogin_test
 import (
 	"bufio"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,11 +23,7 @@ func TestKeyBits(t *testing.T) {
 		return
 	}
 
-	tempDir, err := ioutil.TempDir("", "keybits-")
-	if err != nil {
-		t.Fatalf("ioutil.TempDir: %s", err)
-	}
-	defer os.RemoveAll(tempDir)
+	tempDir := t.TempDir()
 
 	timeout := time.NewTimer(800 * time.Millisecond)
 Loop:
