@@ -358,6 +358,16 @@ func TestLiveEndToEndWorkflow(t *testing.T) {
 		t.Fatalf("USE DATABASE failed: %v", err)
 	}
 
+	// Verify direct driver connector via loginApp.Open without DSN text formatting
+	dbConnector, err := loginApp.Open(dbName)
+	if err != nil {
+		t.Fatalf("loginApp.Open failed: %v", err)
+	}
+	defer dbConnector.Close()
+	if err := dbConnector.Ping(); err != nil {
+		t.Fatalf("dbConnector.Ping failed: %v", err)
+	}
+
 	if _, err := db.Exec(`
 		CREATE TABLE users (
 			id INT AUTO_INCREMENT PRIMARY KEY,

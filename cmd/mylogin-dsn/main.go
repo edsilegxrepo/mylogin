@@ -17,16 +17,21 @@ const (
 	exitNotFound    = 5
 )
 
+var version = "2.0.0"
+
 func run(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("mylogin-dsn", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
 	var (
-		database string
-		filename string
+		database    string
+		filename    string
+		showVersion bool
 	)
 	flags.StringVar(&database, "database", "", "database name to append to DSN")
 	flags.StringVar(&filename, "file", mylogin.DefaultFile(), "path to .mylogin.cnf")
+	flags.BoolVar(&showVersion, "version", false, "display version and exit")
+	flags.BoolVar(&showVersion, "V", false, "display version (short)")
 	flags.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: mylogin-dsn [-file <path>] [-database <dbname>] [<section> ...]\n")
 		flags.PrintDefaults()
@@ -34,6 +39,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	if err := flags.Parse(args); err != nil {
 		return exitUsage
+	}
+
+	if showVersion {
+		fmt.Fprintf(stdout, "mylogin-dsn version %s\n", version)
+		return exitSuccess
 	}
 
 	var sections []string

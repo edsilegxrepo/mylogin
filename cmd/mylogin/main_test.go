@@ -261,11 +261,118 @@ func TestRunMyLogin(t *testing.T) {
 	if code != exitUsage {
 		t.Fatalf("expected exitUsage on invalid flag, got %d", code)
 	}
+
+	// 10. Version flag
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"-V"}, &stdout, &stderr)
+	if code != exitSuccess || !strings.Contains(stdout.String(), "mylogin version") {
+		t.Fatalf("expected version output, got code %d, stdout: %s", code, stdout.String())
+	}
 }
 
 func TestFormatTemplateInvalid(t *testing.T) {
 	tmplFmt := &formatTemplate{}
 	if err := tmplFmt.Set("{{.invalid unclosed template"); err == nil {
 		t.Fatalf("expected error for unclosed template")
+	}
+}
+
+func TestRunMyLoginSubcommands(t *testing.T) {
+	tempDir := t.TempDir()
+	confPath := filepath.Join(tempDir, ".mylogin.cnf")
+
+	var stdout, stderr bytes.Buffer
+
+	// 1. Test set with non-interactive pass flag
+	code := runWithStdin([]string{
+		"set",
+		"-file", confPath,
+		"-login-path", "staging",
+		"-user", "deployer",
+		"-host", "10.0.0.12",
+		"-port", "3308",
+		"-pass", "DeployPass123",
+	}, nil, &stdout, &stderr)
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess for set, got %d, stderr: %s", code, stderr.String())
+	}
+
+	// 2. Test set with password prompt via stdin
+	stdout.Reset()
+	stderr.Reset()
+	code = runWithStdin([]string{
+		"set",
+		"-file", confPath,
+		"-G", "prod",
+		"-u", "admin",
+		"-h", "10.0.0.1",
+		"-p",
+	}, strings.NewReader("PromptSecret456\n"), &stdout, &stderr)
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess for set with prompt, got %d, stderr: %s", code, stderr.String())
+	}
+
+	// 3. Test list
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"list", "-file", confPath}, &stdout, &stderr)
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess for list, got %d, stderr: %s", code, stderr.String())
+	}
+	listOut := stdout.String()
+	if !strings.Contains(listOut, "staging") || !strings.Contains(listOut, "prod") {
+		t.Errorf("list output missing sections: %s", listOut)
+	}
+
+	// 4. Test remove
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"remove", "-file", confPath, "-G", "staging"}, &stdout, &stderr)
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess for remove, got %d, stderr: %s", code, stderr.String())
+	}
+
+	// Verify staging is removed from list
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"list", "-file", confPath}, &stdout, &stderr)
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess for list post-remove, got %d", code)
+	}
+	if strings.Contains(stdout.String(), "staging") {
+		t.Errorf("expected staging to be removed, but still present: %s", stdout.String())
+	}
+
+	// 5. Test remove on non-existent section
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"remove", "-file", confPath, "non_existent"}, &stdout, &stderr)
+	if code != exitNotFound {
+		t.Fatalf("expected exitNotFound for missing section remove, got %d", code)
+	}
+
+	// 6. Test remove without section name
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"remove", "-file", confPath}, &stdout, &stderr)
+	if code != exitUsage {
+		t.Fatalf("expected exitUsage for remove without section, got %d", code)
+	}
+
+	// 7. Test invalid flag in set
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"set", "-invalid-flag"}, &stdout, &stderr)
+	if code != exitUsage {
+		t.Fatalf("expected exitUsage for set with bad flag, got %d", code)
+	}
+
+	// 8. Test list on missing file
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"list", "-file", filepath.Join(tempDir, "missing.cnf")}, &stdout, &stderr)
+	if code != exitFileError {
+		t.Fatalf("expected exitFileError for list on missing file, got %d", code)
 	}
 }

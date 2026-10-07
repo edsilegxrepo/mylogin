@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/edsilegxrepo/myloginpath"
 )
@@ -259,4 +260,170 @@ type failingCoverageReader struct{}
 
 func (f *failingCoverageReader) Read(p []byte) (n int, err error) {
 	return 0, io.ErrUnexpectedEOF
+}
+
+func TestLoginRedactionAndSlog(t *testing.T) {
+	var l mylogin.Login
+	l.SetUser("admin").SetPassword("SuperSecret123!").SetHost("db.example.com").SetPort("3306")
+
+	// Verify raw DSN contains the plaintext password
+	rawDSN := l.DSN()
+	if !strings.Contains(rawDSN, "SuperSecret123!") {
+		t.Errorf("expected DSN to contain password, got: %s", rawDSN)
+	}
+
+	// Verify RedactedDSN masks the password
+	redacted := l.RedactedDSN()
+	if strings.Contains(redacted, "SuperSecret123!") {
+		t.Errorf("RedactedDSN leaked password: %s", redacted)
+	}
+	if !strings.Contains(redacted, "admin:******@") {
+		t.Errorf("expected admin:******@, got: %s", redacted)
+	}
+
+	// Verify String() delegates to RedactedDSN
+	if l.String() != redacted {
+		t.Errorf("expected String() to equal RedactedDSN(), got: %s", l.String())
+	}
+
+	// Verify RedactedFormatDSN with custom db
+	redactedDB := l.RedactedFormatDSN("shop_prod")
+	if strings.Contains(redactedDB, "SuperSecret123!") || !strings.Contains(redactedDB, "/shop_prod") {
+		t.Errorf("unexpected RedactedFormatDSN: %s", redactedDB)
+	}
+
+	// Test slog.LogValuer
+	val := l.LogValue()
+	attrs := val.Group()
+	foundMasked := false
+	for _, a := range attrs {
+		if a.Key == "password" {
+			if a.Value.String() != "******" {
+				t.Errorf("expected masked password in slog, got: %s", a.Value.String())
+			}
+			foundMasked = true
+		}
+	}
+	if !foundMasked {
+		t.Errorf("slog LogValue did not include password attribute")
+	}
+
+	// Test nil and empty Login handling
+	var nilLogin *mylogin.Login
+	if nilLogin.RedactedDSN() != "/" {
+		t.Errorf("expected / for nil login, got %s", nilLogin.RedactedDSN())
+	}
+	if nilLogin.RedactedFormatDSN("db") != "/db" {
+		t.Errorf("expected /db for nil login, got %s", nilLogin.RedactedFormatDSN("db"))
+	}
+	if len(nilLogin.LogValue().Group()) != 0 {
+		t.Errorf("expected empty group for nil login LogValue")
+	}
+}
+
+func TestLoginConnectorAndOpen(t *testing.T) {
+	var l mylogin.Login
+	l.SetUser("app").SetPassword("pass").SetHost("localhost").SetPort("3306")
+
+	// Test Connector
+	connector, err := l.Connector("app_db")
+	if err != nil {
+		t.Fatalf("Connector failed: %v", err)
+	}
+	if connector == nil {
+		t.Fatalf("expected non-nil connector")
+	}
+
+	// Test Open
+	db, err := l.Open("app_db")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	if db == nil {
+		t.Fatalf("expected non-nil *sql.DB")
+	}
+	defer db.Close()
+}
+
+func TestExtendedConfigOptionMapping(t *testing.T) {
+	var l mylogin.Login
+	l.SetHost("localhost").SetPort("3306")
+	l.SetExtra("ssl-mode", "REQUIRED")
+	l.SetExtra("connect-timeout", "15")
+	l.SetExtra("max-allowed-packet", "16777216")
+
+	cfg := l.Config()
+	if cfg.TLSConfig != "skip-verify" {
+		t.Errorf("expected TLSConfig skip-verify for REQUIRED, got: %s", cfg.TLSConfig)
+	}
+	if cfg.Timeout != 15*time.Second {
+		t.Errorf("expected 15s timeout, got: %v", cfg.Timeout)
+	}
+	if cfg.MaxAllowedPacket != 16777216 {
+		t.Errorf("expected 16777216 MaxAllowedPacket, got: %d", cfg.MaxAllowedPacket)
+	}
+
+	// Test other SSL modes
+	l.SetExtra("ssl-mode", "DISABLED")
+	if l.Config().TLSConfig != "false" {
+		t.Errorf("expected false for DISABLED")
+	}
+	l.SetExtra("ssl-mode", "VERIFY_CA")
+	if l.Config().TLSConfig != "true" {
+		t.Errorf("expected true for VERIFY_CA")
+	}
+	l.SetExtra("ssl-mode", "custom-tls")
+	if l.Config().TLSConfig != "custom-tls" {
+		t.Errorf("expected custom-tls for custom")
+	}
+}
+
+func TestTopLevelConvenienceAndSectionsWriteFile(t *testing.T) {
+	tempDir := t.TempDir()
+	confPath := filepath.Join(tempDir, ".mylogin.cnf")
+
+	origEnv := os.Getenv("MYSQL_TEST_LOGIN_FILE")
+	defer os.Setenv("MYSQL_TEST_LOGIN_FILE", origEnv)
+	os.Setenv("MYSQL_TEST_LOGIN_FILE", confPath)
+
+	var secs mylogin.Sections
+	var clientSec mylogin.Login
+	clientSec.SetUser("root").SetHost("127.0.0.1").SetPort("3306")
+	secs.Set("client", clientSec)
+
+	var appSec mylogin.Login
+	appSec.SetUser("app_user").SetPassword("app_pass")
+	secs.Set("app", appSec)
+
+	// Test Sections.WriteFile
+	if err := secs.WriteFile(confPath); err != nil {
+		t.Fatalf("Sections.WriteFile failed: %v", err)
+	}
+
+	// Test Load()
+	loadedSecs, err := mylogin.Load()
+	if err != nil {
+		t.Fatalf("mylogin.Load failed: %v", err)
+	}
+	if len(loadedSecs) != 2 || !loadedSecs.Has("client") || !loadedSecs.Has("app") {
+		t.Fatalf("Load mismatch: %v", loadedSecs.Names())
+	}
+
+	// Test Default()
+	defLogin, err := mylogin.Default()
+	if err != nil {
+		t.Fatalf("mylogin.Default failed: %v", err)
+	}
+	if defLogin.User == nil || *defLogin.User != "root" {
+		t.Errorf("expected root user in Default(), got %v", defLogin.User)
+	}
+
+	// Test Get()
+	appLogin, err := mylogin.Get("app")
+	if err != nil {
+		t.Fatalf("mylogin.Get failed: %v", err)
+	}
+	if appLogin.User == nil || *appLogin.User != "app_user" || appLogin.Host == nil || *appLogin.Host != "127.0.0.1" {
+		t.Errorf("expected app_user with merged host from client, got %+v", appLogin)
+	}
 }

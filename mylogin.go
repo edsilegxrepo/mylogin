@@ -136,6 +136,21 @@ func CheckPermissions(filename string) error {
 	return nil
 }
 
+// Default reads and merges the default [client] section from DefaultFile().
+func Default() (*Login, error) {
+	return ReadLogin(DefaultFile(), []string{DefaultSection})
+}
+
+// Get reads credentials for a specific section merged with [client] from DefaultFile().
+func Get(section string) (*Login, error) {
+	return ReadLogin(DefaultFile(), []string{DefaultSection, section})
+}
+
+// Load reads all sections from DefaultFile().
+func Load() (Sections, error) {
+	return ReadSections(DefaultFile())
+}
+
 // ReadLogin reads a mylogin.cnf file, extracts the requested sections and
 // merges them to obtain a single Login (that may be empty).
 func ReadLogin(filename string, sectionNames []string) (login *Login, err error) {

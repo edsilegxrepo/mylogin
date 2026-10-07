@@ -20,6 +20,8 @@ import (
 	"github.com/edsilegxrepo/myloginpath"
 )
 
+var version = "dev"
+
 const (
 	exitSuccess     = 0
 	exitGeneral     = 1
@@ -211,7 +213,191 @@ func (f *formatTemplateLn) Set(s string) error {
 	return f.formatTemplate.Set(s + "\n")
 }
 
+func readPassword(r io.Reader) (string, error) {
+	scanner := bufio.NewScanner(r)
+	if scanner.Scan() {
+		return scanner.Text(), nil
+	}
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+	return "", nil
+}
+
+func runSet(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("mylogin set", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	var filename string
+	flags.StringVar(&filename, "file", mylogin.DefaultFile(), "mylogin.cnf path")
+
+	var loginPath string
+	flags.StringVar(&loginPath, "login-path", mylogin.DefaultSection, "login path to set")
+	flags.StringVar(&loginPath, "G", mylogin.DefaultSection, "login path (short)")
+
+	var user string
+	flags.StringVar(&user, "user", "", "username")
+	flags.StringVar(&user, "u", "", "username (short)")
+
+	var host string
+	flags.StringVar(&host, "host", "", "hostname")
+	flags.StringVar(&host, "h", "", "hostname (short)")
+
+	var port string
+	flags.StringVar(&port, "port", "", "port")
+	flags.StringVar(&port, "P", "", "port (short)")
+
+	var socket string
+	flags.StringVar(&socket, "socket", "", "socket path")
+	flags.StringVar(&socket, "S", "", "socket path (short)")
+
+	var promptPassword bool
+	flags.BoolVar(&promptPassword, "password", false, "prompt for password")
+	flags.BoolVar(&promptPassword, "p", false, "prompt for password (short)")
+
+	var plainPassword string
+	flags.StringVar(&plainPassword, "pass", "", "password directly (non-interactive)")
+
+	if err := flags.Parse(args); err != nil {
+		return exitUsage
+	}
+
+	var password string
+	if plainPassword != "" {
+		password = plainPassword
+	} else if promptPassword {
+		fmt.Fprintf(stderr, "Enter password: ")
+		var err error
+		password, err = readPassword(stdin)
+		if err != nil {
+			fmt.Fprintf(stderr, "mylogin: failed to read password: %v\n", err)
+			return exitGeneral
+		}
+	}
+
+	cleanPath := filepath.Clean(filename)
+	var sections mylogin.Sections
+	if _, err := os.Stat(cleanPath); err == nil {
+		sections, err = mylogin.ReadSections(cleanPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "mylogin: failed to read existing file: %v\n", err)
+			return exitFormatError
+		}
+	}
+
+	existing := sections.Login(loginPath)
+	login := existing.Clone()
+	if login == nil {
+		login = new(mylogin.Login)
+	}
+	if user != "" {
+		login.SetUser(user)
+	}
+	if host != "" {
+		login.SetHost(host)
+	}
+	if port != "" {
+		login.SetPort(port)
+	}
+	if socket != "" {
+		login.SetSocket(socket)
+	}
+	if password != "" || promptPassword {
+		login.SetPassword(password)
+	}
+
+	sections.Set(loginPath, *login)
+	if err := sections.WriteFile(cleanPath); err != nil {
+		fmt.Fprintf(stderr, "mylogin: failed to write %s: %v\n", cleanPath, err)
+		return exitFileError
+	}
+
+	return exitSuccess
+}
+
+func runRemove(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("mylogin remove", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	var filename string
+	flags.StringVar(&filename, "file", mylogin.DefaultFile(), "mylogin.cnf path")
+
+	var loginPath string
+	flags.StringVar(&loginPath, "login-path", "", "login path to remove")
+	flags.StringVar(&loginPath, "G", "", "login path (short)")
+
+	if err := flags.Parse(args); err != nil {
+		return exitUsage
+	}
+
+	if loginPath == "" && flags.NArg() > 0 {
+		loginPath = flags.Arg(0)
+	}
+	if loginPath == "" {
+		fmt.Fprintf(stderr, "mylogin: remove requires a login path name\n")
+		return exitUsage
+	}
+
+	cleanPath := filepath.Clean(filename)
+	sections, err := mylogin.ReadSections(cleanPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "mylogin: failed to read %s: %v\n", cleanPath, err)
+		return exitFileError
+	}
+
+	if !sections.Delete(loginPath) {
+		fmt.Fprintf(stderr, "mylogin: section %q not found in %s\n", loginPath, cleanPath)
+		return exitNotFound
+	}
+
+	if err := sections.WriteFile(cleanPath); err != nil {
+		fmt.Fprintf(stderr, "mylogin: failed to write %s: %v\n", cleanPath, err)
+		return exitFileError
+	}
+
+	return exitSuccess
+}
+
+func runList(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("mylogin list", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	var filename string
+	flags.StringVar(&filename, "file", mylogin.DefaultFile(), "mylogin.cnf path")
+
+	if err := flags.Parse(args); err != nil {
+		return exitUsage
+	}
+
+	cleanPath := filepath.Clean(filename)
+	sections, err := mylogin.ReadSections(cleanPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "mylogin: failed to read %s: %v\n", cleanPath, err)
+		return exitFileError
+	}
+
+	for _, name := range sections.Names() {
+		fmt.Fprintln(stdout, name)
+	}
+	return exitSuccess
+}
+
 func run(args []string, stdout, stderr io.Writer) int {
+	return runWithStdin(args, os.Stdin, stdout, stderr)
+}
+
+func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "set":
+			return runSet(args[1:], stdin, stdout, stderr)
+		case "remove", "rm":
+			return runRemove(args[1:], stdout, stderr)
+		case "list", "ls":
+			return runList(args[1:], stdout, stderr)
+		}
+	}
+
 	flags := flag.NewFlagSet("mylogin", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
@@ -231,8 +417,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 		flags.Var(fmtFlag, name, usage)
 	}
 
+	var showVersion bool
+	flags.BoolVar(&showVersion, "version", false, "display version and exit")
+	flags.BoolVar(&showVersion, "V", false, "display version (short)")
+
 	if err := flags.Parse(args); err != nil {
 		return exitUsage
+	}
+
+	if showVersion {
+		fmt.Fprintf(stdout, "mylogin version %s\n", version)
+		return exitSuccess
 	}
 
 	var selectedFormat outputFormat

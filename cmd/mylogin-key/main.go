@@ -51,15 +51,26 @@ func printKey(w io.Writer, key mylogin.Key) {
 		b64)
 }
 
+var version = "dev"
+
 func run(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("mylogin-key", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+
+	var showVersion bool
+	flags.BoolVar(&showVersion, "version", false, "display version and exit")
+	flags.BoolVar(&showVersion, "V", false, "display version (short)")
 	flags.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: mylogin-key [<file> ...]\n")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
 		return exitUsage
+	}
+
+	if showVersion {
+		fmt.Fprintf(stdout, "mylogin-key version %s\n", version)
+		return exitSuccess
 	}
 
 	var filenames []string

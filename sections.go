@@ -186,6 +186,15 @@ func (sections Sections) Format() (string, error) {
 	return buf.String(), nil
 }
 
+// WriteFile safely and atomically encodes the sections to an encrypted file with 0600 permissions.
+func (sections Sections) WriteFile(filename string) error {
+	formatted, err := sections.Format()
+	if err != nil {
+		return err
+	}
+	return WriteFile(filename, strings.NewReader(formatted))
+}
+
 // Merge returns a single Login which is the result of the ordered merge
 // of the sections with the given names (see Login.Merge).
 // For each option, the last section that has a value takes precedence.

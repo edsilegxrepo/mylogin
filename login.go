@@ -1,9 +1,14 @@
 package mylogin
 
 import (
+	"database/sql"
+	"database/sql/driver"
 	"fmt"
+	"log/slog"
 	"net"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 )
@@ -181,13 +186,100 @@ func (l *Login) Config() *mysql.Config {
 		if db, ok := l.Extra["database"]; ok {
 			cfg.DBName = db
 		}
+		if mode, ok := l.Extra["ssl-mode"]; ok {
+			switch strings.ToUpper(mode) {
+			case "DISABLED":
+				cfg.TLSConfig = "false"
+			case "REQUIRED":
+				cfg.TLSConfig = "skip-verify"
+			case "VERIFY_CA", "VERIFY_IDENTITY":
+				cfg.TLSConfig = "true"
+			default:
+				cfg.TLSConfig = mode
+			}
+		}
+		if timeoutStr, ok := l.Extra["connect-timeout"]; ok {
+			if sec, err := strconv.Atoi(timeoutStr); err == nil && sec > 0 {
+				cfg.Timeout = time.Duration(sec) * time.Second
+			}
+		}
+		if packetStr, ok := l.Extra["max-allowed-packet"]; ok {
+			if packet, err := strconv.Atoi(packetStr); err == nil && packet > 0 {
+				cfg.MaxAllowedPacket = packet
+			}
+		}
 	}
 	return cfg
 }
 
-// String returns DSN().
+// RedactedDSN returns the connection string with the password masked as "******".
+func (l *Login) RedactedDSN() string {
+	return l.RedactedFormatDSN("")
+}
+
+// RedactedFormatDSN returns the connection string for database with the password masked as "******".
+func (l *Login) RedactedFormatDSN(database string) string {
+	if l == nil || l.IsEmpty() {
+		if database != "" {
+			return "/" + database
+		}
+		return "/"
+	}
+	cp := l.Clone()
+	if cp.Password != nil && *cp.Password != "" {
+		masked := "******"
+		cp.Password = &masked
+	}
+	return cp.FormatDSN(database)
+}
+
+// String implements fmt.Stringer, returning a redacted DSN to prevent accidental password leaks in logs.
 func (l *Login) String() string {
-	return l.DSN()
+	return l.RedactedDSN()
+}
+
+// LogValue implements slog.LogValuer to safely represent credentials in structured logs without leaking passwords.
+func (l *Login) LogValue() slog.Value {
+	if l == nil || l.IsEmpty() {
+		return slog.GroupValue()
+	}
+	attrs := make([]slog.Attr, 0, 6)
+	if l.User != nil {
+		attrs = append(attrs, slog.String("user", *l.User))
+	}
+	if l.Password != nil && *l.Password != "" {
+		attrs = append(attrs, slog.String("password", "******"))
+	}
+	if l.Host != nil {
+		attrs = append(attrs, slog.String("host", *l.Host))
+	}
+	if l.Port != nil {
+		attrs = append(attrs, slog.String("port", *l.Port))
+	}
+	if l.Socket != nil {
+		attrs = append(attrs, slog.String("socket", *l.Socket))
+	}
+	return slog.GroupValue(attrs...)
+}
+
+// Connector returns an official database/sql driver.Connector configured with these credentials.
+// It completely avoids serializing passwords into cleartext DSN strings.
+func (l *Login) Connector(database string) (driver.Connector, error) {
+	cfg := l.Config()
+	if database != "" {
+		cfg.DBName = database
+	}
+	return mysql.NewConnector(cfg)
+}
+
+// Open creates and initializes an active *sql.DB directly using driver.Connector.
+// It provides a secure alternative to sql.Open("mysql", dsn) by preventing password leaks in DSN strings.
+func (l *Login) Open(database string) (*sql.DB, error) {
+	connector, err := l.Connector(database)
+	if err != nil {
+		return nil, err
+	}
+	return sql.OpenDB(connector), nil
 }
 
 var unescape = strings.NewReplacer(

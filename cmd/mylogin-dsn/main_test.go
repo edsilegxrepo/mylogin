@@ -62,4 +62,12 @@ func TestRunDSN(t *testing.T) {
 	if code != exitUsage {
 		t.Fatalf("expected exitUsage, got %d", code)
 	}
+
+	// 6. Version flag
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"-V"}, &stdout, &stderr)
+	if code != exitSuccess || !strings.Contains(stdout.String(), "mylogin-dsn version") {
+		t.Fatalf("expected version output, got code %d, stdout: %s", code, stdout.String())
+	}
 }
