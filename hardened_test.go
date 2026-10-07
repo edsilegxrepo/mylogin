@@ -177,7 +177,7 @@ func TestWriteFileHelper(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Stat failed: %v", err)
 	}
-	if info.Mode().Perm() != 0600 {
+	if info.Mode().Perm() != 0o600 {
 		t.Errorf("expected 0600 permissions, got %o", info.Mode().Perm())
 	}
 
@@ -216,10 +216,10 @@ func TestCheckPermissions(t *testing.T) {
 	safeFile := filepath.Join(tempDir, "safe.cnf")
 	unsafeFile := filepath.Join(tempDir, "unsafe.cnf")
 
-	if err := os.WriteFile(safeFile, []byte("content"), 0600); err != nil {
+	if err := os.WriteFile(safeFile, []byte("content"), 0o600); err != nil {
 		t.Fatalf("failed to create safe file: %v", err)
 	}
-	if err := os.WriteFile(unsafeFile, []byte("content"), 0644); err != nil {
+	if err := os.WriteFile(unsafeFile, []byte("content"), 0o644); err != nil {
 		t.Fatalf("failed to create unsafe file: %v", err)
 	}
 
@@ -292,7 +292,7 @@ func TestInvalidPaddingError(t *testing.T) {
 	}
 	// Corrupt the last byte of the ciphertext chunk
 	data[len(data)-1] ^= 0xFF
-	if err := os.WriteFile(filePath, data, 0600); err != nil {
+	if err := os.WriteFile(filePath, data, 0o600); err != nil {
 		t.Fatalf("WriteFile corrupted failed: %v", err)
 	}
 

@@ -68,4 +68,3 @@ func TestRunMyLoginKey(t *testing.T) {
 		t.Fatalf("expected exitUsage, got %d", code)
 	}
 }
-

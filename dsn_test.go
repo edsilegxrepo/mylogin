@@ -1,9 +1,9 @@
 package mylogin_test
 
 import (
-	"github.com/edsilegxrepo/myloginpath"
-
 	"testing"
+
+	"github.com/edsilegxrepo/myloginpath"
 
 	"github.com/go-sql-driver/mysql"
 )

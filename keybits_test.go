@@ -45,7 +45,7 @@ func testFileKeyBits(t *testing.T, mysql_config_editor string, filename string) 
 		"MYSQL_TEST_LOGIN_FILE="+filename,
 	)
 	var err error
-	cmd.Stdout, err = os.OpenFile(os.DevNull, os.O_WRONLY, 0700)
+	cmd.Stdout, err = os.OpenFile(os.DevNull, os.O_WRONLY, 0o700)
 	if err != nil {
 		t.Fatalf("%s: %s", os.DevNull, err)
 	}

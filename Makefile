@@ -26,8 +26,8 @@ coverage: ## Calculate unit test coverage without polluting repo
 vet: ## Run go vet analysis
 	$(GO) vet ./...
 
-fmt: ## Format Go source code
-	gofmt -s -w .
+fmt: ## Format Go source code with gofumpt
+	gofumpt -l -w .
 
 clean: ## Remove compiled binaries and temporary test artifacts
 	rm -rf $(BIN_DIR) *.out coverage.txt

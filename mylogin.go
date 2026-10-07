@@ -128,7 +128,7 @@ func CheckPermissions(filename string) error {
 		return err
 	}
 	if runtime.GOOS != "windows" {
-		if info.Mode().Perm()&0077 != 0 {
+		if info.Mode().Perm()&0o077 != 0 {
 			return fmt.Errorf("%w: current mode is %#o, expected 0600", ErrInsecurePermissions, info.Mode().Perm())
 		}
 	}
@@ -451,7 +451,7 @@ func WriteFile(filename string, plainText io.Reader) error {
 	}
 
 	dir := filepath.Dir(filename)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
@@ -465,7 +465,7 @@ func WriteFile(filename string, plainText io.Reader) error {
 		_ = os.Remove(tmpName)
 	}()
 
-	if err := os.Chmod(tmpName, 0600); err != nil {
+	if err := os.Chmod(tmpName, 0o600); err != nil {
 		tmp.Close()
 		return fmt.Errorf("failed to set temp file permissions: %w", err)
 	}
@@ -488,5 +488,5 @@ func WriteFile(filename string, plainText io.Reader) error {
 		return fmt.Errorf("failed to atomically rename temp file to %s: %w", filename, err)
 	}
 
-	return os.Chmod(filename, 0600)
+	return os.Chmod(filename, 0o600)
 }

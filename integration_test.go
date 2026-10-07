@@ -537,7 +537,7 @@ func TestLiveCLIToolsWorkflow(t *testing.T) {
 
 	// Build CLI tools into temp directory
 	binDir := filepath.Join(tempDir, "bin")
-	if err := os.MkdirAll(binDir, 0700); err != nil {
+	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		t.Fatalf("failed to create binDir: %v", err)
 	}
 
@@ -596,4 +596,3 @@ func TestLiveCLIToolsWorkflow(t *testing.T) {
 		t.Fatalf("expected non-empty key output from mylogin-key")
 	}
 }
-

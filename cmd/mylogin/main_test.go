@@ -229,7 +229,7 @@ func TestRunMyLogin(t *testing.T) {
 
 	// 8. Corrupted file error branches
 	corruptedPath := filepath.Join(tempDir, "corrupted.cnf")
-	if err := os.WriteFile(corruptedPath, []byte("short_corrupted_header"), 0600); err != nil {
+	if err := os.WriteFile(corruptedPath, []byte("short_corrupted_header"), 0o600); err != nil {
 		t.Fatalf("failed to write corrupted file: %v", err)
 	}
 
@@ -269,4 +269,3 @@ func TestFormatTemplateInvalid(t *testing.T) {
 		t.Fatalf("expected error for unclosed template")
 	}
 }
-

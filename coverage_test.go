@@ -184,7 +184,9 @@ func TestCoreCoverageBoost(t *testing.T) {
 	}
 
 	// Test decFile.Parse() via interface assertion
-	if parser, ok := decFile.(interface{ Parse() (mylogin.Sections, error) }); ok {
+	if parser, ok := decFile.(interface {
+		Parse() (mylogin.Sections, error)
+	}); ok {
 		parsedSecs, err := parser.Parse()
 		if err != nil {
 			t.Fatalf("parser.Parse failed: %v", err)
