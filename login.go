@@ -5,33 +5,44 @@ import (
 	"fmt"
 	"net"
 	"strings"
+
+	"github.com/go-sql-driver/mysql"
 )
 
-// Login is the content of a section of mylogin.cnf.
+// Login is the structured content of a section in mylogin.cnf.
 type Login struct {
-	User     *string `json:"user,omitempty"`
-	Password *string `json:"password,omitempty"`
-	Host     *string `json:"host,omitempty"`   // TCP hostname
-	Port     *string `json:"port,omitempty"`   // TCP port
-	Socket   *string `json:"socket,omitempty"` // Unix socket path
+	User     *string           `json:"user,omitempty"`
+	Password *string           `json:"password,omitempty"`
+	Host     *string           `json:"host,omitempty"`   // TCP hostname
+	Port     *string           `json:"port,omitempty"`   // TCP port
+	Socket   *string           `json:"socket,omitempty"` // Unix socket path
+	Extra    map[string]string `json:"extra,omitempty"`  // Additional client options (e.g. database, default-auth)
 }
 
-// IsEmpty is true if l is nil or none of the fields are set.
+func cloneStringPtr(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	cp := *s
+	return &cp
+}
+
+// IsEmpty is true if l is nil or none of the options are set.
 func (l *Login) IsEmpty() bool {
 	return l == nil ||
 		(l.User == nil &&
 			l.Password == nil &&
 			l.Host == nil &&
 			l.Port == nil &&
-			l.Socket == nil)
+			l.Socket == nil &&
+			len(l.Extra) == 0)
 }
 
-// DSN builds a DSN for github.com/go-sql-driver/mysql
+// DSN builds a DSN prefix for github.com/go-sql-driver/mysql.
 //
-// The DSN returned always has a '/' at the end.
-// The DSN for an empty Login is just "/".
+// The DSN returned always ends with '/'.
+// For an empty Login, it returns "/".
 func (l *Login) DSN() string {
-	// Handles the case where login is nil
 	if l.IsEmpty() {
 		return "/"
 	}
@@ -70,6 +81,38 @@ func (l *Login) DSN() string {
 	return b.String()
 }
 
+// Config creates and initializes a *mysql.Config struct from the Login options.
+func (l *Login) Config() *mysql.Config {
+	cfg := mysql.NewConfig()
+	if l.User != nil {
+		cfg.User = *l.User
+	}
+	if l.Password != nil {
+		cfg.Passwd = *l.Password
+	}
+	if l.Socket != nil {
+		cfg.Net = "unix"
+		cfg.Addr = *l.Socket
+	} else if l.Host != nil || l.Port != nil {
+		cfg.Net = "tcp"
+		host := "127.0.0.1"
+		port := "3306"
+		if l.Host != nil {
+			host = *l.Host
+		}
+		if l.Port != nil {
+			port = *l.Port
+		}
+		cfg.Addr = net.JoinHostPort(host, port)
+	}
+	if l.Extra != nil {
+		if db, ok := l.Extra["database"]; ok {
+			cfg.DBName = db
+		}
+	}
+	return cfg
+}
+
 // String returns DSN().
 func (l *Login) String() string {
 	return l.DSN()
@@ -90,25 +133,23 @@ var unquote = strings.NewReplacer(
 ).Replace
 
 func (l *Login) parseLine(line string) error {
-	// Reference code:
-	// https://github.com/mysql/mysql-shell/blob/master/mysql-secret-store/login-path/login_path_helper.cc#L52
+	s := strings.SplitN(line, "=", 2)
+	if len(s) != 2 {
+		return fmt.Errorf("invalid line format (missing '='): %q", line)
+	}
 
-	s := strings.SplitN(line, " = ", 2)
+	key := strings.TrimSpace(s[0])
+	v := strings.TrimSpace(s[1])
 
-	v := s[1]
-
-	// mysql_config_editor quotes strings since 8.0.24
-	// https://github.com/mysql/mysql-server/commit/7d8028ac99730d4ccbe42d6edc11cc4f6d0cddca#diff-f8995fe51ada555169245803572ae5bd33a1793f6c027a39f8475c9156068ee5L518
-	// shcore::unquote_string: https://github.com/mysql/mysql-shell/blob/master/mysqlshdk/libs/utils/utils_string.cc#L225
+	// mysql_config_editor quotes strings since MySQL 8.0.24
 	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
 		v = unquote(v[1 : len(v)-1])
 	} else {
 		v = strings.ReplaceAll(v, `\\`, `\`)
 	}
-
 	v = unescape(v)
 
-	switch s[0] {
+	switch key {
 	case "user":
 		l.User = &v
 	case "password":
@@ -120,27 +161,41 @@ func (l *Login) parseLine(line string) error {
 	case "socket":
 		l.Socket = &v
 	default:
-		return fmt.Errorf("Unknown option '%s'", s[0])
+		if l.Extra == nil {
+			l.Extra = make(map[string]string)
+		}
+		l.Extra[key] = v
 	}
 	return nil
 }
 
-// Merge merges l into login: options set in l take precedence over
-// options set in login.
+// Merge merges other into l: options set in other take precedence over options in l.
+// String pointers are deep-copied to prevent pointer aliasing.
 func (l *Login) Merge(other *Login) {
+	if other == nil {
+		return
+	}
 	if other.User != nil {
-		l.User = other.User
+		l.User = cloneStringPtr(other.User)
 	}
 	if other.Password != nil {
-		l.Password = other.Password
+		l.Password = cloneStringPtr(other.Password)
 	}
 	if other.Host != nil {
-		l.Host = other.Host
+		l.Host = cloneStringPtr(other.Host)
 	}
 	if other.Port != nil {
-		l.Port = other.Port
+		l.Port = cloneStringPtr(other.Port)
 	}
 	if other.Socket != nil {
-		l.Socket = other.Socket
+		l.Socket = cloneStringPtr(other.Socket)
+	}
+	if len(other.Extra) > 0 {
+		if l.Extra == nil {
+			l.Extra = make(map[string]string, len(other.Extra))
+		}
+		for k, v := range other.Extra {
+			l.Extra[k] = v
+		}
 	}
 }

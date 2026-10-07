@@ -1,7 +1,7 @@
 package mylogin_test
 
 import (
-	"github.com/dolmen-go/mylogin"
+	"github.com/edsilegxrepo/myloginpath"
 
 	"testing"
 

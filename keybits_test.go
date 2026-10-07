@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dolmen-go/mylogin"
+	"github.com/edsilegxrepo/myloginpath"
 )
 
 // mysql_config_editor generates files with a key where the high 3 bits

@@ -3,8 +3,15 @@
 
 package mylogin
 
-import "os"
+import (
+	"os"
+	"path/filepath"
+)
 
 func platformDefaultFile() string {
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		return filepath.Join(home, ".mylogin.cnf")
+	}
 	return os.ExpandEnv(`${HOME}/.mylogin.cnf`)
 }

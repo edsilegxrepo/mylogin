@@ -27,7 +27,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/dolmen-go/mylogin"
+	"github.com/edsilegxrepo/myloginpath"
 )
 
 type outputFormat interface {

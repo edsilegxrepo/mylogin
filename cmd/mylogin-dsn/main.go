@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/dolmen-go/mylogin"
+	"github.com/edsilegxrepo/myloginpath"
 )
 
 func main() {

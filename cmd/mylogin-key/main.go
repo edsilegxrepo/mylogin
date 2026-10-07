@@ -11,7 +11,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/dolmen-go/mylogin"
+	"github.com/edsilegxrepo/myloginpath"
 )
 
 func printKey(key mylogin.Key) {

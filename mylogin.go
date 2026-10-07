@@ -1,26 +1,27 @@
 // Package mylogin reads and writes ~/.mylogin.cnf created by mysql_config_editor.
 //
 // Reference documentation:
-//   - https://dev.mysql.com/doc/refman/8.0/en/mysql-config-editor.html
-//   - https://dev.mysql.com/doc/refman/8.0/en/option-file-options.html#option_general_login-path
+//   - https://dev.mysql.com/doc/refman/8.4/en/mysql-config-editor.html
+//   - https://dev.mysql.com/doc/refman/8.4/en/option-file-options.html#option_general_login-path
 //
 // Example:
 //
 //	mysql_config_editor set --login-path=foo --user=bar -p
 //
-// For usage examples, see the utilies in the same repo.
+// For usage examples, see the utilities in the cmd/ directory.
 package mylogin
 
 import (
 	"bufio"
-	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 // DefaultSection is the name of the base section used by all MySQL client tools.
@@ -36,7 +37,7 @@ func (k Key) IsZero() bool {
 func (k *Key) cipher() cipher.Block {
 	// 16 bytes key for AES-128
 	var aesKey [16]byte
-	// Apply xor
+	// Apply xor folding across the 20-byte key
 	for i := 0; i < len(k); i++ {
 		aesKey[i%16] ^= k[i]
 	}
@@ -50,19 +51,17 @@ func (k *Key) cipher() cipher.Block {
 }
 
 // NewKey creates a new key from a source of random bytes.
-// See [math/rand.Read] and [crypto/rand.Read] as possible sources.
+// See [crypto/rand.Read] or [math/rand.Read] as possible sources.
 //
-// The generated key has the 3 high bits cleared so each byte is non-printable.
+// The generated key has the 3 high bits cleared so each byte is non-printable (< 32).
 func NewKey(readRandom func([]byte) (int, error)) (Key, error) {
 	var key Key
-	// FIXME We will finally use only 5 bits of each byte.
-	//       We should take much less bytes and spread them.
 	_, err := readRandom(key[:])
 	if err != nil {
-		return Key{}, nil
+		return Key{}, err
 	}
 	for i := range key {
-		// Clear the high bits
+		// Clear the 3 high bits (0x1F = 00011111b)
 		key[i] = key[i] & 0x1F
 	}
 	return key, nil
@@ -80,7 +79,6 @@ func DefaultFile() string {
 	if len(f) != 0 {
 		return f
 	}
-	// see defaultfile.go, defaultfile_windows.go
 	return platformDefaultFile()
 }
 
@@ -112,23 +110,29 @@ func ReadSections(filename string) (sections Sections, err error) {
 
 // Parse parses the plaintext content of a mylogin.cnf file
 // and returns the structured content.
+// Blank lines, leading/trailing whitespace, and comments ('#' or ';') are ignored safely.
 func Parse(rd io.Reader) (sections Sections, err error) {
-	// Reference code: https://github.com/mysql/mysql-shell/blob/master/mysql-secret-store/login-path/login_path_helper.cc#L52
 	var login *Login
 	scanner := bufio.NewScanner(rd)
 	for scanner.Scan() {
-		line := scanner.Text()
-		if line[0] == '[' {
-			sections = append(sections,
-				Section{Name: line[1 : len(line)-1]})
+		line := strings.TrimSpace(scanner.Text())
+		if len(line) == 0 || line[0] == '#' || line[0] == ';' {
+			continue
+		}
+		if line[0] == '[' && strings.HasSuffix(line, "]") {
+			secName := strings.TrimSpace(line[1 : len(line)-1])
+			sections = append(sections, Section{Name: secName})
 			login = &sections[len(sections)-1].Login
-		} else if login != nil && line != "" {
+		} else if login != nil {
 			if err = login.parseLine(line); err != nil {
 				return nil, err
 			}
 		}
 	}
-	return
+	if err = scanner.Err(); err != nil {
+		return nil, err
+	}
+	return sections, nil
 }
 
 // File is the full structure of a mylogin.cnf file.
@@ -139,6 +143,37 @@ type File interface {
 	ByteOrder() binary.ByteOrder
 	// The plaintext content of the file
 	PlainText() io.Reader
+}
+
+// PlainFile is a concrete implementation of the File interface.
+type PlainFile struct {
+	KeyVal    Key
+	Order     binary.ByteOrder
+	PlainData io.Reader
+}
+
+func (f *PlainFile) Key() Key {
+	return f.KeyVal
+}
+
+func (f *PlainFile) ByteOrder() binary.ByteOrder {
+	if f.Order == nil {
+		return binary.LittleEndian
+	}
+	return f.Order
+}
+
+func (f *PlainFile) PlainText() io.Reader {
+	return f.PlainData
+}
+
+// NewFile wraps key, byteOrder, and a plaintext reader into a File suitable for Encode.
+func NewFile(key Key, byteOrder binary.ByteOrder, plainText io.Reader) File {
+	return &PlainFile{
+		KeyVal:    key,
+		Order:     byteOrder,
+		PlainData: plainText,
+	}
 }
 
 type decoder struct {
@@ -166,12 +201,9 @@ func (d *decoder) Parse() (Sections, error) {
 	return Parse(d)
 }
 
-// Decode is a filter that returns the plaintext content of a mylogin.cnf
-// file.
+// Decode is a filter that returns the plaintext content of a mylogin.cnf file.
 // The file is encrypted with AES 128 CBC with the key embedded in the file.
 func Decode(input io.Reader) (File, error) {
-	// http://ocelot.ca/blog/blog/2015/05/21/decrypt-mylogin-cnf/
-
 	in := bufio.NewReader(input)
 
 	// Skip first 4 bytes
@@ -191,7 +223,6 @@ func Decode(input io.Reader) (File, error) {
 	if n != cap(key) {
 		return nil, io.EOF
 	}
-	// log.Printf("Key: %v\n", key)
 
 	// The following 4 bytes are the length of the first chunk
 	// We will use them to detect the byte order
@@ -222,7 +253,7 @@ func (d *decoder) Read(buf []byte) (n int, err error) {
 	}
 	var size int32
 	for {
-		// Read a new chunk
+		// Read a new chunk size
 		if err = binary.Read(d.input, d.byteOrder, &size); err != nil {
 			return 0, err
 		}
@@ -243,7 +274,7 @@ func (d *decoder) Read(buf []byte) (n int, err error) {
 
 	blockCipher := d.key.cipher()
 
-	// Each 16-bytes block is encoded with a null IV
+	// Each 16-bytes block is decoded with a null IV
 	d.buffer = d.chunk[:size]
 	for i := 0; i < int(size); i += aes.BlockSize {
 		cbc := cipher.NewCBCDecrypter(blockCipher, make([]byte, aes.BlockSize))
@@ -252,22 +283,18 @@ func (d *decoder) Read(buf []byte) (n int, err error) {
 	}
 
 	// Remove PKCS#7 padding
-	// last byte value gives the number of padding byte
-	// each padding byte has that value
 	padding := d.buffer[len(d.buffer)-1]
-	// Note that mysql_config_editor generates up to 16 bytes of padding
-	// which is a full AES block, so 16 encrypted bytes just to be drop when
-	// reading.
-	// Is it a bug or some nasty redundancy to reveal the encryption key?
-	if padding > 0 && padding <= aes.BlockSize {
-		//log.Printf("Padding: %d\n", padding)
+	if padding > 0 && padding <= aes.BlockSize && int(padding) <= len(d.buffer) {
+		valid := true
 		for _, c := range d.buffer[len(d.buffer)-int(padding):] {
 			if c != padding {
-				padding = 0
+				valid = false
 				break
 			}
 		}
-		d.buffer = d.buffer[:len(d.buffer)-int(padding)]
+		if valid {
+			d.buffer = d.buffer[:len(d.buffer)-int(padding)]
+		}
 	}
 
 	n = copy(buf, d.buffer)
@@ -282,7 +309,7 @@ func Encode(w io.Writer, f File) (err error) {
 		return errors.New("key is not initialized")
 	}
 
-	//  Header
+	// Header: 4 null bytes + 20-byte key
 	if _, err = w.Write([]byte{0, 0, 0, 0}); err != nil {
 		return
 	}
@@ -291,62 +318,56 @@ func Encode(w io.Writer, f File) (err error) {
 	}
 
 	blockCipher := key.cipher()
-
 	scanner := bufio.NewScanner(f.PlainText())
-
-	// TODO scan strictly on \n (not \r\n)
 	scanner.Split(bufio.ScanLines)
-
-	var chunk [4096]byte
 	byteOrder := f.ByteOrder()
+	if byteOrder == nil {
+		byteOrder = binary.LittleEndian
+	}
 
 	for scanner.Scan() {
-		l := copy(chunk[:cap(chunk)-aes.BlockSize], scanner.Bytes())
-		// ScanLines does not return the EOL, so we add it back
-		chunk[l] = '\n'
-		l++
+		line := scanner.Bytes()
+		// Re-append newline
+		l := len(line) + 1
+		paddedLen := ((l + aes.BlockSize) / aes.BlockSize) * aes.BlockSize
+		padCount := byte(paddedLen - l)
 
-		// There can be up to 16 (really, not 15) bytes of padding
-		// in files generated by mysql_config_editor
-		n := ((l + aes.BlockSize) / aes.BlockSize) * aes.BlockSize
-		//fmt.Println("padding:", n-l)
-		paddingChar := byte(n - l)
-		for i := l; i < n; i++ {
-			chunk[i] = paddingChar
+		chunk := make([]byte, paddedLen)
+		copy(chunk, line)
+		chunk[len(line)] = '\n'
+		for i := l; i < paddedLen; i++ {
+			chunk[i] = padCount
 		}
 
-		for i := 0; i < n; i += aes.BlockSize {
+		for i := 0; i < paddedLen; i += aes.BlockSize {
 			cbc := cipher.NewCBCEncrypter(blockCipher, make([]byte, aes.BlockSize))
 			b := chunk[i : i+aes.BlockSize]
 			cbc.CryptBlocks(b, b)
 		}
 
-		if err = binary.Write(w, byteOrder, int32(n)); err != nil {
+		if err = binary.Write(w, byteOrder, int32(paddedLen)); err != nil {
 			return
 		}
-		if _, err = w.Write(chunk[:n]); err != nil {
+		if _, err = w.Write(chunk); err != nil {
 			return
 		}
 	}
 
-	return
+	return scanner.Err()
 }
 
-// TODO find a good name
-type file struct {
-	K  Key
-	B  binary.ByteOrder
-	PT []byte
-}
+// WriteFile writes plaintext configuration to an encrypted file at path with 0600 permissions.
+func WriteFile(filename string, plainText io.Reader) error {
+	key, err := NewKey(rand.Read)
+	if err != nil {
+		return fmt.Errorf("failed to generate key: %w", err)
+	}
 
-func (f *file) Key() Key {
-	return f.K
-}
+	f, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
 
-func (f *file) ByteOrder() binary.ByteOrder {
-	return f.B
-}
-
-func (f *file) PlainText() io.Reader {
-	return bytes.NewBuffer(f.PT)
+	return Encode(f, NewFile(key, binary.LittleEndian, plainText))
 }

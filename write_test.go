@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dolmen-go/mylogin"
+	"github.com/edsilegxrepo/myloginpath"
 )
 
 type fileInfoByName []os.FileInfo
