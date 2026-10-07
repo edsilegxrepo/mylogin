@@ -20,7 +20,7 @@ func TestDSN(t *testing.T) {
 		Port:     stringPtr("3306"),
 	}
 	dsn := l.DSN()
-	t.Logf(dsn)
+	t.Log(dsn)
 	cfg, err := mysql.ParseDSN(dsn)
 	if err != nil {
 		t.Fatal("unexpected error:", err)

@@ -62,7 +62,7 @@ func TestReadWrite(t *testing.T) {
 	var out bytes.Buffer
 
 	for path := range files {
-		t.Logf(path)
+		t.Log(path)
 		f, err := os.Open(path)
 		if err != nil {
 			t.Errorf("%s: %s", path, err)
