@@ -1,13 +1,36 @@
+BIN_DIR := bin
+GO ?= go
 
+.PHONY: all build test test-integration coverage vet fmt clean help
 
-go ?= GO111MODULE=on go
-export go
+all: test build
 
-.PHONY: go-version go-get
+build: ## Compile all CLI binaries into bin/
+	@mkdir -p $(BIN_DIR)
+	$(GO) build -o $(BIN_DIR)/mylogin ./cmd/mylogin
+	$(GO) build -o $(BIN_DIR)/mylogin-dsn ./cmd/mylogin-dsn
+	$(GO) build -o $(BIN_DIR)/mylogin-key ./cmd/mylogin-key
 
-go-version: go.mod $(shell $(go) list -f '{{$$Dir := .Dir}}{{range .GoFiles}}{{$$Dir}}/{{.}} {{end}}' ./...)
-	@TZ=UTC git log -1 '--date=format-local:%Y%m%d%H%M%S' --abbrev=12 '--pretty=tformat:v0.0.0-%cd-%h' $^
+test: ## Run unit tests with data race detector
+	$(GO) test -race ./...
 
-go-get:
-	@echo $(go) get $(shell $(go) list .)@$(shell $(MAKE) -f $(firstword $(MAKEFILE_LIST)) go-version)
+test-integration: ## Run live unmocked MySQL integration tests
+	$(GO) test -v -tags=integration ./...
 
+coverage: ## Calculate unit test coverage without polluting repo
+	@COV=$$(mktemp) && \
+	$(GO) test -coverprofile="$$COV" ./... && \
+	$(GO) tool cover -func="$$COV" && \
+	rm -f "$$COV"
+
+vet: ## Run go vet analysis
+	$(GO) vet ./...
+
+fmt: ## Format Go source code
+	gofmt -s -w .
+
+clean: ## Remove compiled binaries and temporary test artifacts
+	rm -rf $(BIN_DIR) *.out coverage.txt
+
+help: ## Display available make targets
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-18s\033[0m %s\n", $$1, $$2}'

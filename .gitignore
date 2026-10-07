@@ -1,0 +1,40 @@
+# Compiled Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+mylogin
+mylogin-dsn
+mylogin-key
+
+# Test and Coverage Artifacts
+*.test
+*.out
+coverage.txt
+coverage.html
+cpu.prof
+mem.prof
+
+# Temporary Files
+*.tmp
+*.temp
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# Operating System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
