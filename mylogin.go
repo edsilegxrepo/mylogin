@@ -13,6 +13,7 @@ package mylogin
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -31,6 +32,9 @@ const DefaultSection = "client"
 
 // MaxChunkSize defines the maximum chunk size allowed to prevent memory exhaustion DOS attacks.
 const MaxChunkSize = 16 * 1024 * 1024 // 16 MB
+
+// MaxLineSize defines the maximum option line length allowed when scanning configurations.
+const MaxLineSize = 1024 * 1024 // 1 MB
 
 var (
 	// ErrInvalidBlockSize is returned when an encrypted block has an invalid size or alignment.
@@ -65,7 +69,7 @@ func (k *Key) cipher() cipher.Block {
 	// 16 bytes key for AES-128
 	var aesKey [16]byte
 	defer func() {
-		// Wipe folded key material
+		// Wipe intermediate folded key material
 		for i := range aesKey {
 			aesKey[i] = 0
 		}
@@ -163,6 +167,10 @@ func ReadSections(filename string) (sections Sections, err error) {
 func Parse(rd io.Reader) (sections Sections, err error) {
 	var login *Login
 	scanner := bufio.NewScanner(rd)
+	// Buffer up to 1 MB per line to handle long TLS certificates or base64 tokens
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, MaxLineSize)
+
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if len(line) == 0 || line[0] == '#' || line[0] == ';' {
@@ -228,6 +236,7 @@ func NewFile(key Key, byteOrder binary.ByteOrder, plainText io.Reader) File {
 type decoder struct {
 	key       Key
 	byteOrder binary.ByteOrder
+	cipher    cipher.Block // Cached AES cipher block to avoid key expansion on every chunk
 
 	input  io.Reader
 	chunk  []byte
@@ -248,6 +257,19 @@ func (d *decoder) PlainText() io.Reader {
 
 func (d *decoder) Parse() (Sections, error) {
 	return Parse(d)
+}
+
+// Close securely wipes memory and closes the underlying reader if it implements io.Closer.
+func (d *decoder) Close() error {
+	d.key.Zero()
+	for i := range d.chunk {
+		d.chunk[i] = 0
+	}
+	d.buffer = nil
+	if closer, ok := d.input.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
 }
 
 // Decode returns the plaintext content of a mylogin.cnf file.
@@ -285,10 +307,14 @@ func Decode(input io.Reader) (File, error) {
 		byteOrder = binary.LittleEndian
 	}
 
+	// Pre-initialize and cache block cipher to avoid re-generating key schedule on every chunk
+	blockCipher := key.cipher()
+
 	return &decoder{
 		key:       key,
 		input:     in,
 		byteOrder: byteOrder,
+		cipher:    blockCipher,
 		chunk:     make([]byte, 4096),
 	}, nil
 }
@@ -331,12 +357,10 @@ func (d *decoder) Read(buf []byte) (n int, err error) {
 		return 0, fmt.Errorf("invalid read size: got %d, expected %d", n, size)
 	}
 
-	blockCipher := d.key.cipher()
-
 	// Decrypt each 16-byte block using a null IV (MySQL's block decryption convention)
 	var zeroIV [aes.BlockSize]byte
 	for i := 0; i < int(size); i += aes.BlockSize {
-		cbc := cipher.NewCBCDecrypter(blockCipher, zeroIV[:])
+		cbc := cipher.NewCBCDecrypter(d.cipher, zeroIV[:])
 		b := d.chunk[i : i+aes.BlockSize]
 		cbc.CryptBlocks(b, b)
 	}
@@ -377,6 +401,9 @@ func Encode(w io.Writer, f File) (err error) {
 	blockCipher := key.cipher()
 	scanner := bufio.NewScanner(f.PlainText())
 	scanner.Split(bufio.ScanLines)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, MaxLineSize)
+
 	byteOrder := f.ByteOrder()
 	if byteOrder == nil {
 		byteOrder = binary.LittleEndian
@@ -385,6 +412,9 @@ func Encode(w io.Writer, f File) (err error) {
 	var zeroIV [aes.BlockSize]byte
 	for scanner.Scan() {
 		line := scanner.Bytes()
+		// Strip any trailing carriage return (\r) for canonical cross-platform newline
+		line = bytes.TrimRight(line, "\r")
+
 		l := len(line) + 1 // +1 for newline
 		paddedLen := ((l + aes.BlockSize) / aes.BlockSize) * aes.BlockSize
 		padCount := byte(paddedLen - l)

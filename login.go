@@ -1,7 +1,6 @@
 package mylogin
 
 import (
-	"bytes"
 	"fmt"
 	"net"
 	"strings"
@@ -27,6 +26,66 @@ func cloneStringPtr(s *string) *string {
 	return &cp
 }
 
+// Clone returns a deep copy of the Login struct.
+func (l *Login) Clone() *Login {
+	if l == nil {
+		return nil
+	}
+	cp := &Login{
+		User:     cloneStringPtr(l.User),
+		Password: cloneStringPtr(l.Password),
+		Host:     cloneStringPtr(l.Host),
+		Port:     cloneStringPtr(l.Port),
+		Socket:   cloneStringPtr(l.Socket),
+	}
+	if len(l.Extra) > 0 {
+		cp.Extra = make(map[string]string, len(l.Extra))
+		for k, v := range l.Extra {
+			cp.Extra[k] = v
+		}
+	}
+	return cp
+}
+
+// SetUser sets the user field.
+func (l *Login) SetUser(user string) *Login {
+	l.User = &user
+	return l
+}
+
+// SetPassword sets the password field.
+func (l *Login) SetPassword(password string) *Login {
+	l.Password = &password
+	return l
+}
+
+// SetHost sets the TCP host field.
+func (l *Login) SetHost(host string) *Login {
+	l.Host = &host
+	return l
+}
+
+// SetPort sets the TCP port field.
+func (l *Login) SetPort(port string) *Login {
+	l.Port = &port
+	return l
+}
+
+// SetSocket sets the Unix socket path.
+func (l *Login) SetSocket(socket string) *Login {
+	l.Socket = &socket
+	return l
+}
+
+// SetExtra sets an arbitrary extra client option.
+func (l *Login) SetExtra(key, value string) *Login {
+	if l.Extra == nil {
+		l.Extra = make(map[string]string)
+	}
+	l.Extra[key] = value
+	return l
+}
+
 // IsEmpty is true if l is nil or none of the options are set.
 func (l *Login) IsEmpty() bool {
 	return l == nil ||
@@ -48,7 +107,6 @@ func (l *Login) Zero() {
 	if l == nil || l.Password == nil {
 		return
 	}
-	// Best-effort overwrite of password string content
 	pBytes := []byte(*l.Password)
 	for i := range pBytes {
 		pBytes[i] = 0
@@ -65,39 +123,14 @@ func (l *Login) DSN() string {
 	if l.IsEmpty() {
 		return "/"
 	}
-
-	var b bytes.Buffer
-	if l.User != nil {
-		b.WriteString(*l.User)
-		if l.Password != nil {
-			b.WriteByte(':')
-			b.WriteString(*l.Password)
-		}
-		b.WriteByte('@')
+	cfg := l.Config()
+	cfg.DBName = ""
+	dsn := cfg.FormatDSN()
+	// FormatDSN produces "..." without trailing slash when db is empty; ensure trailing '/'
+	if !strings.HasSuffix(dsn, "/") {
+		dsn += "/"
 	}
-	if l.Socket != nil {
-		b.WriteString("unix(")
-		b.WriteString(*l.Socket)
-		b.WriteByte(')')
-	} else if l.Host != nil || l.Port != nil {
-		var host, port string
-		if l.Host != nil {
-			host = *l.Host
-		}
-		if l.Port != nil {
-			port = *l.Port
-		} else {
-			port = "3306" // MySQL default port
-		}
-		b.WriteString("tcp(")
-		b.WriteString(net.JoinHostPort(host, port))
-		b.WriteByte(')')
-	}
-
-	// The separator with the database name
-	b.WriteByte('/')
-
-	return b.String()
+	return dsn
 }
 
 // FormatDSN generates a complete and driver-compliant DSN using the official mysql driver parser.
@@ -136,10 +169,10 @@ func (l *Login) Config() *mysql.Config {
 		cfg.Net = "tcp"
 		host := "127.0.0.1"
 		port := "3306"
-		if l.Host != nil {
+		if l.Host != nil && *l.Host != "" {
 			host = *l.Host
 		}
-		if l.Port != nil {
+		if l.Port != nil && *l.Port != "" {
 			port = *l.Port
 		}
 		cfg.Addr = net.JoinHostPort(host, port)
@@ -184,9 +217,8 @@ func (l *Login) parseLine(line string) error {
 	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
 		v = unquote(v[1 : len(v)-1])
 	} else {
-		v = strings.ReplaceAll(v, `\\`, `\`)
+		v = unescape(strings.ReplaceAll(v, `\\`, `\`))
 	}
-	v = unescape(v)
 
 	switch key {
 	case "user":

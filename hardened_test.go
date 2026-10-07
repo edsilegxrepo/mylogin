@@ -304,3 +304,77 @@ func TestInvalidPaddingError(t *testing.T) {
 	t.Logf("Observed expected padding/corruption error: %v", err)
 }
 
+func TestSectionWriteToAndValidation(t *testing.T) {
+	var sections mylogin.Sections
+
+	// Build sections using new builder setters
+	var sec1 mylogin.Login
+	sec1.SetHost("cluster.internal").SetPort("3306")
+	sections.Set("client", sec1)
+
+	var sec2 mylogin.Login
+	sec2.SetUser("app_admin").SetPassword(`P@ss"word\with\special`).SetExtra("database", "prod_db")
+	sections.Set("production", sec2)
+
+	// Format to plaintext
+	formatted, err := sections.Format()
+	if err != nil {
+		t.Fatalf("Format failed: %v", err)
+	}
+	t.Logf("Formatted output:\n%s", formatted)
+
+	// Parse it back to verify full roundtrip
+	parsed, err := mylogin.Parse(strings.NewReader(formatted))
+	if err != nil {
+		t.Fatalf("Parse of Formatted output failed: %v", err)
+	}
+
+	if len(parsed) != 2 {
+		t.Fatalf("expected 2 parsed sections, got %d", len(parsed))
+	}
+
+	prod := parsed.Login("production")
+	if *prod.User != "app_admin" {
+		t.Errorf("user mismatch: %s", *prod.User)
+	}
+	if *prod.Password != `P@ss"word\with\special` {
+		t.Errorf("password unquoting mismatch: %q", *prod.Password)
+	}
+	if prod.Extra["database"] != "prod_db" {
+		t.Errorf("extra database mismatch: %s", prod.Extra["database"])
+	}
+
+	// Test injection validation
+	var badSec mylogin.Section
+	badSec.Name = "bad\n[injected_section]"
+	if err := badSec.Validate(); err == nil {
+		t.Fatal("expected error on section name with newline, got nil")
+	}
+
+	// Test Sections.Delete
+	if !sections.Delete("production") {
+		t.Fatal("expected Delete to return true for existing section")
+	}
+	if sections.Has("production") {
+		t.Fatal("section should be deleted")
+	}
+}
+
+func TestDSNInjectionDefense(t *testing.T) {
+	// If password or host has special characters, verify DSN formatting
+	var l mylogin.Login
+	l.SetUser("alice").SetPassword("pass@word:special").SetHost("db.internal").SetPort("3306")
+
+	// DSN prefix
+	dsnPrefix := l.DSN()
+	cfg, err := mysql.ParseDSN(dsnPrefix + "testdb")
+	if err != nil {
+		t.Fatalf("mysql.ParseDSN failed on formatted DSN %q: %v", dsnPrefix, err)
+	}
+
+	if cfg.User != "alice" || cfg.Passwd != "pass@word:special" || cfg.Addr != "db.internal:3306" {
+		t.Errorf("parsed DSN values mismatch: %+v", cfg)
+	}
+}
+
+

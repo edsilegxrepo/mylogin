@@ -1,18 +1,8 @@
-// Command mylogin allows to dump the content of ~/.my.cnf.
+// Command mylogin allows to dump the content of ~/.mylogin.cnf.
 //
 // # Usage
 //
 //	mylogin [-file ~/.mylogin.cnf] [-replay | -remove | -json | -template=<template> | -templateln=<template>] [<section> ...]
-//
-// # Template output
-//
-// See Go package [text/template] for the template syntax.
-//
-// The following function is defined in addition: `json`
-//
-// Examples:
-//
-//	mylogin '-templateln={{ json . }}'
 package main
 
 import (
@@ -21,7 +11,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -30,13 +19,20 @@ import (
 	"github.com/edsilegxrepo/myloginpath"
 )
 
+const (
+	exitSuccess     = 0
+	exitUsage       = 2
+	exitFileError   = 3
+	exitFormatError = 4
+	exitNotFound    = 5
+)
+
 type outputFormat interface {
 	Help() (string, string)
 	flag.Getter
 	Print(w io.Writer, section *mylogin.Section) error
 }
 
-// outputFormatBool is an abstract base format for formats defined as a bool CLI flag.
 type outputFormatBool struct {
 	bool
 }
@@ -74,12 +70,7 @@ func (formatReplay) Help() (string, string) {
 }
 
 func (formatReplay) Print(w io.Writer, section *mylogin.Section) error {
-	args := make([]string, 5, 5+5*2)
-	args[0] = `mysql_config_editor`
-	args[1] = `set`
-	args[2] = `--skip-warn`
-	args[3] = `-G`
-	args[4] = section.Name
+	args := []string{`mysql_config_editor`, `set`, `--skip-warn`, `-G`, section.Name}
 	if section.Login.User != nil {
 		args = append(args, `-u`, *section.Login.User)
 	}
@@ -113,9 +104,6 @@ func (formatRemove) Print(w io.Writer, section *mylogin.Section) error {
 }
 
 func loginAsMap(login *mylogin.Login) map[string]interface{} {
-	// The login struct contains *string
-	// This is not convenient to use in templates
-	// So we remap it to a map, skipping nil values
 	m := make(map[string]interface{})
 	for _, x := range []struct {
 		key   string
@@ -131,7 +119,10 @@ func loginAsMap(login *mylogin.Login) map[string]interface{} {
 			m[x.key] = *x.value
 		}
 	}
-
+	// Include any arbitrary extra client options
+	for k, v := range login.Extra {
+		m[k] = v
+	}
 	return m
 }
 
@@ -144,7 +135,7 @@ func (formatJSON) Help() (string, string) {
 }
 
 func (formatJSON) Print(w io.Writer, section *mylogin.Section) error {
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
 	return enc.Encode(loginAsMap(&section.Login))
@@ -193,9 +184,8 @@ func (f *formatTemplate) Get() interface{} {
 
 func (f *formatTemplate) Print(w io.Writer, section *mylogin.Section) error {
 	m := loginAsMap(&section.Login)
-
 	m["section"] = section.Name
-	// Export trucated section name to use with --defaults-group-suffix option of the MySQL CLI
+
 	const sectionSuffix = "groupSuffix"
 	switch {
 	case strings.HasPrefix(section.Name, "mysql"):
@@ -204,12 +194,7 @@ func (f *formatTemplate) Print(w io.Writer, section *mylogin.Section) error {
 		m[sectionSuffix] = section.Name[6:]
 	}
 
-	err := f.tmpl.Execute(os.Stdout, m)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprint(w)
-	return err
+	return f.tmpl.Execute(w, m)
 }
 
 type formatTemplateLn struct {
@@ -236,9 +221,9 @@ func main() {
 		&formatTemplateLn{},
 	}
 
-	for _, fmt := range formats {
-		name, usage := fmt.Help()
-		flag.Var(fmt, name, usage)
+	for _, fmtFlag := range formats {
+		name, usage := fmtFlag.Help()
+		flag.Var(fmtFlag, name, usage)
 	}
 
 	flag.Parse()
@@ -252,56 +237,68 @@ func main() {
 		if selectedFormat != nil {
 			h1, _ := ft.Help()
 			h2, _ := selectedFormat.Help()
-			fmt.Fprintf(os.Stderr, "options -%s and -%s are exclusive.\n", h1, h2)
-			flag.Usage()
-			os.Exit(1)
+			fmt.Fprintf(os.Stderr, "mylogin: options -%s and -%s are mutually exclusive.\n", h1, h2)
+			os.Exit(exitUsage)
 		}
 		selectedFormat = ft
 	}
 
 	if selectedFormat != nil {
-
 		if flag.NArg() != 0 {
-
 			for _, name := range flag.Args() {
 				login, err := mylogin.ReadLogin(filename, []string{name})
 				if err != nil {
-					log.Fatal(err)
+					if os.IsNotExist(err) || os.IsPermission(err) {
+						fmt.Fprintf(os.Stderr, "mylogin: file error: %v\n", err)
+						os.Exit(exitFileError)
+					}
+					fmt.Fprintf(os.Stderr, "mylogin: decryption/parse error: %v\n", err)
+					os.Exit(exitFormatError)
 				}
-				if login == nil {
-					log.Fatal("section doesn't exists")
+				if login.IsEmpty() {
+					fmt.Fprintf(os.Stderr, "mylogin: section %q does not exist\n", name)
+					os.Exit(exitNotFound)
 				}
 
-				err = selectedFormat.Print(os.Stdout, &mylogin.Section{Name: name, Login: *login})
-				if err != nil {
-					log.Fatal(err)
+				if err := selectedFormat.Print(os.Stdout, &mylogin.Section{Name: name, Login: *login}); err != nil {
+					fmt.Fprintf(os.Stderr, "mylogin: print error: %v\n", err)
+					os.Exit(exitGeneral)
 				}
 			}
 		} else {
 			sections, err := mylogin.ReadSections(filename)
 			if err != nil {
-				log.Fatal(err)
+				if os.IsNotExist(err) || os.IsPermission(err) {
+					fmt.Fprintf(os.Stderr, "mylogin: file error: %v\n", err)
+					os.Exit(exitFileError)
+				}
+				fmt.Fprintf(os.Stderr, "mylogin: decryption/parse error: %v\n", err)
+				os.Exit(exitFormatError)
 			}
 
 			for i := range sections {
-				err = selectedFormat.Print(os.Stdout, &sections[i])
-				if err != nil {
-					log.Fatal(err)
+				if err := selectedFormat.Print(os.Stdout, &sections[i]); err != nil {
+					fmt.Fprintf(os.Stderr, "mylogin: print error: %v\n", err)
+					os.Exit(exitGeneral)
 				}
 			}
-
 		}
-
 	} else {
 		file, err := os.Open(filename)
 		if err != nil {
-			log.Fatal(err)
+			if os.IsNotExist(err) || os.IsPermission(err) {
+				fmt.Fprintf(os.Stderr, "mylogin: file error: %v\n", err)
+				os.Exit(exitFileError)
+			}
+			fmt.Fprintf(os.Stderr, "mylogin: error: %v\n", err)
+			os.Exit(exitFileError)
 		}
 		defer file.Close()
 
 		f, err := mylogin.Decode(bufio.NewReader(file))
 		if err != nil {
-			log.Fatal(err)
+			fmt.Fprintf(os.Stderr, "mylogin: decode error: %v\n", err)
+			os.Exit(exitFormatError)
 		}
 		rd := f.PlainText()
 
@@ -309,9 +306,12 @@ func main() {
 			rd = mylogin.FilterSection(rd, flag.Arg(0))
 		}
 
-		_, err = io.Copy(os.Stdout, rd)
-		if err != nil {
-			log.Fatal(err)
+		if _, err := io.Copy(os.Stdout, rd); err != nil {
+			fmt.Fprintf(os.Stderr, "mylogin: output error: %v\n", err)
+			os.Exit(exitGeneral)
 		}
 	}
+
+	os.Exit(exitSuccess)
 }
+const exitGeneral = 1
