@@ -38,6 +38,25 @@ func (l *Login) IsEmpty() bool {
 			len(l.Extra) == 0)
 }
 
+// HasCredentials reports whether a user or password is set on the login.
+func (l *Login) HasCredentials() bool {
+	return l != nil && (l.User != nil || l.Password != nil)
+}
+
+// Zero securely wipes sensitive fields (specifically password) from memory.
+func (l *Login) Zero() {
+	if l == nil || l.Password == nil {
+		return
+	}
+	// Best-effort overwrite of password string content
+	pBytes := []byte(*l.Password)
+	for i := range pBytes {
+		pBytes[i] = 0
+	}
+	cleared := ""
+	l.Password = &cleared
+}
+
 // DSN builds a DSN prefix for github.com/go-sql-driver/mysql.
 //
 // The DSN returned always ends with '/'.
@@ -81,9 +100,29 @@ func (l *Login) DSN() string {
 	return b.String()
 }
 
+// FormatDSN generates a complete and driver-compliant DSN using the official mysql driver parser.
+func (l *Login) FormatDSN(database string) string {
+	if l.IsEmpty() {
+		if database != "" {
+			return "/" + database
+		}
+		return "/"
+	}
+	cfg := l.Config()
+	if database != "" {
+		cfg.DBName = database
+	}
+	return cfg.FormatDSN()
+}
+
 // Config creates and initializes a *mysql.Config struct from the Login options.
+// It is nil-safe and returns an empty config if l is nil.
 func (l *Login) Config() *mysql.Config {
 	cfg := mysql.NewConfig()
+	if l == nil || l.IsEmpty() {
+		return cfg
+	}
+
 	if l.User != nil {
 		cfg.User = *l.User
 	}

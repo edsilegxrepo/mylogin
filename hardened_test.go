@@ -194,3 +194,113 @@ func TestWriteFileHelper(t *testing.T) {
 		t.Errorf("user/pass incorrect: %v / %v", merged.User, merged.Password)
 	}
 }
+
+func TestFilterSectionResilience(t *testing.T) {
+	// Verifies that FilterSection does not panic on empty lines
+	input := "[client]\nhost = 127.0.0.1\n\n\n[staging]\nhost = 10.0.0.1\n\n"
+	filtered := mylogin.FilterSection(strings.NewReader(input), "staging")
+	sections, err := mylogin.Parse(filtered)
+	if err != nil {
+		t.Fatalf("Parse filtered section failed: %v", err)
+	}
+	if len(sections) != 1 || sections[0].Name != "staging" {
+		t.Fatalf("expected 1 staging section, got: %+v", sections)
+	}
+	if *sections[0].Login.Host != "10.0.0.1" {
+		t.Errorf("expected host 10.0.0.1, got %v", sections[0].Login.Host)
+	}
+}
+
+func TestCheckPermissions(t *testing.T) {
+	tempDir := t.TempDir()
+	safeFile := filepath.Join(tempDir, "safe.cnf")
+	unsafeFile := filepath.Join(tempDir, "unsafe.cnf")
+
+	if err := os.WriteFile(safeFile, []byte("content"), 0600); err != nil {
+		t.Fatalf("failed to create safe file: %v", err)
+	}
+	if err := os.WriteFile(unsafeFile, []byte("content"), 0644); err != nil {
+		t.Fatalf("failed to create unsafe file: %v", err)
+	}
+
+	if err := mylogin.CheckPermissions(safeFile); err != nil {
+		t.Errorf("CheckPermissions failed on 0600 file: %v", err)
+	}
+
+	err := mylogin.CheckPermissions(unsafeFile)
+	if err == nil {
+		t.Errorf("expected ErrInsecurePermissions on 0644 file, got nil")
+	} else if !errors.Is(err, mylogin.ErrInsecurePermissions) {
+		t.Errorf("expected ErrInsecurePermissions, got: %v", err)
+	}
+}
+
+func TestZeroSecurity(t *testing.T) {
+	key := mylogin.Key{1, 2, 3, 4, 5}
+	if key.IsZero() {
+		t.Fatal("key should not be zero")
+	}
+	key.Zero()
+	if !key.IsZero() {
+		t.Fatal("key should be zero after Zero()")
+	}
+
+	secret := "sensitive_password_123"
+	login := &mylogin.Login{Password: &secret}
+	login.Zero()
+	if *login.Password != "" {
+		t.Errorf("password was not cleared: %q", *login.Password)
+	}
+}
+
+func TestNilSafety(t *testing.T) {
+	var nilLogin *mylogin.Login
+
+	// None of these should panic
+	if !nilLogin.IsEmpty() {
+		t.Errorf("expected nil login to be empty")
+	}
+	if nilLogin.HasCredentials() {
+		t.Errorf("expected nil login not to have credentials")
+	}
+	if dsn := nilLogin.DSN(); dsn != "/" {
+		t.Errorf("expected '/', got %q", dsn)
+	}
+	if dsn := nilLogin.FormatDSN("testdb"); dsn != "/testdb" {
+		t.Errorf("expected '/testdb', got %q", dsn)
+	}
+	cfg := nilLogin.Config()
+	if cfg == nil {
+		t.Errorf("expected non-nil Config() from nil login")
+	}
+	nilLogin.Zero() // should safely do nothing without panic
+}
+
+func TestInvalidPaddingError(t *testing.T) {
+	tempDir := t.TempDir()
+	filePath := filepath.Join(tempDir, "corrupted.cnf")
+
+	rawContent := "[client]\nhost = \"localhost\"\n"
+	if err := mylogin.WriteFile(filePath, strings.NewReader(rawContent)); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	// Corrupt a ciphertext byte
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	// Corrupt the last byte of the ciphertext chunk
+	data[len(data)-1] ^= 0xFF
+	if err := os.WriteFile(filePath, data, 0600); err != nil {
+		t.Fatalf("WriteFile corrupted failed: %v", err)
+	}
+
+	// Reading the corrupted file should trigger ErrInvalidPadding or parse error
+	_, err = mylogin.ReadSections(filePath)
+	if err == nil {
+		t.Fatal("expected error reading corrupted encrypted file, got nil")
+	}
+	t.Logf("Observed expected padding/corruption error: %v", err)
+}
+

@@ -6,8 +6,8 @@ import (
 	"io"
 )
 
-// FilterSection reads an INI-style content and filter out any section
-// except the given one
+// FilterSection reads an INI-style content and filters out any section
+// except the given one.
 func FilterSection(rd io.Reader, section string) io.Reader {
 	header := make([]byte, 1, 2+len(section))
 	header[0] = '['
@@ -25,7 +25,7 @@ type filterSection struct {
 
 func (f *filterSection) Read(buf []byte) (n int, err error) {
 	if len(buf) == 0 {
-		return
+		return 0, nil
 	}
 	for f.buffer.Len() == 0 {
 		if !f.scanner.Scan() {
@@ -33,10 +33,11 @@ func (f *filterSection) Read(buf []byte) (n int, err error) {
 			if err == nil {
 				err = io.EOF
 			}
-			return
+			return 0, err
 		}
 		line := f.scanner.Bytes()
-		if line[0] == '[' {
+		// Defensive bounds check to prevent panic on empty lines
+		if len(line) > 0 && line[0] == '[' {
 			f.show = bytes.Equal(f.header, line)
 		}
 		if f.show {
@@ -49,5 +50,5 @@ func (f *filterSection) Read(buf []byte) (n int, err error) {
 	if err == io.EOF {
 		err = nil
 	}
-	return
+	return n, err
 }

@@ -21,23 +21,57 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 )
 
 // DefaultSection is the name of the base section used by all MySQL client tools.
 const DefaultSection = "client"
 
-// Key is a key used for encryption of mylogin.cnf files.
+// MaxChunkSize defines the maximum chunk size allowed to prevent memory exhaustion DOS attacks.
+const MaxChunkSize = 16 * 1024 * 1024 // 16 MB
+
+var (
+	// ErrInvalidBlockSize is returned when an encrypted block has an invalid size or alignment.
+	ErrInvalidBlockSize = errors.New("invalid block size: must be positive, block-aligned, and within limits")
+
+	// ErrInvalidPadding is returned when PKCS#7 padding validation fails on decrypted ciphertext.
+	ErrInvalidPadding = errors.New("invalid PKCS#7 padding: decrypted content is corrupted or key is incorrect")
+
+	// ErrInsecurePermissions is returned when a .mylogin.cnf file is readable or writable by other users.
+	ErrInsecurePermissions = errors.New("insecure file permissions: .mylogin.cnf must only be accessible by the owner (mode 0600)")
+
+	// ErrKeyNotInitialized is returned when attempting to encode with an uninitialized key.
+	ErrKeyNotInitialized = errors.New("key is not initialized")
+)
+
+// Key is a 20-byte key used for encryption of mylogin.cnf files.
 type Key [20]byte
 
+// IsZero reports whether the key is completely uninitialized.
 func (k Key) IsZero() bool {
 	return k[0] == 0 && k == Key{}
+}
+
+// Zero securely wipes the key material from memory.
+func (k *Key) Zero() {
+	for i := range k {
+		k[i] = 0
+	}
 }
 
 func (k *Key) cipher() cipher.Block {
 	// 16 bytes key for AES-128
 	var aesKey [16]byte
-	// Apply xor folding across the 20-byte key
+	defer func() {
+		// Wipe folded key material
+		for i := range aesKey {
+			aesKey[i] = 0
+		}
+	}()
+
+	// Apply XOR folding across the 20-byte key
 	for i := 0; i < len(k); i++ {
 		aesKey[i%16] ^= k[i]
 	}
@@ -82,28 +116,43 @@ func DefaultFile() string {
 	return platformDefaultFile()
 }
 
+// CheckPermissions verifies that the file at path has strict owner-only permissions (0600).
+// On Unix platforms, it returns ErrInsecurePermissions if group or others have any access.
+func CheckPermissions(filename string) error {
+	info, err := os.Stat(filename)
+	if err != nil {
+		return err
+	}
+	if runtime.GOOS != "windows" {
+		if info.Mode().Perm()&0077 != 0 {
+			return fmt.Errorf("%w: current mode is %#o, expected 0600", ErrInsecurePermissions, info.Mode().Perm())
+		}
+	}
+	return nil
+}
+
 // ReadLogin reads a mylogin.cnf file, extracts the requested sections and
 // merges them to obtain a single Login (that may be empty).
 func ReadLogin(filename string, sectionNames []string) (login *Login, err error) {
 	sections, err := ReadSections(filename)
 	if err != nil {
-		return
+		return nil, err
 	}
 	login = sections.Merge(sectionNames)
-	return
+	return login, nil
 }
 
 // ReadSections reads all Sections of a mylogin.cnf file.
 func ReadSections(filename string) (sections Sections, err error) {
 	f, err := os.Open(filename)
 	if err != nil {
-		return
+		return nil, err
 	}
 	defer f.Close()
 
 	file, err := Decode(bufio.NewReader(f))
 	if err != nil {
-		return
+		return nil, err
 	}
 	return Parse(file.PlainText())
 }
@@ -181,8 +230,8 @@ type decoder struct {
 	byteOrder binary.ByteOrder
 
 	input  io.Reader
-	chunk  [256 * aes.BlockSize]byte
-	buffer []byte // Slice pointing to chunk
+	chunk  []byte
+	buffer []byte // Slice pointing to decrypted buffer
 }
 
 func (d *decoder) Key() Key {
@@ -201,12 +250,12 @@ func (d *decoder) Parse() (Sections, error) {
 	return Parse(d)
 }
 
-// Decode is a filter that returns the plaintext content of a mylogin.cnf file.
-// The file is encrypted with AES 128 CBC with the key embedded in the file.
+// Decode returns the plaintext content of a mylogin.cnf file.
+// The file is encrypted with AES-128 in CBC mode with the key embedded in the file.
 func Decode(input io.Reader) (File, error) {
 	in := bufio.NewReader(input)
 
-	// Skip first 4 bytes
+	// Skip first 4 null bytes
 	head4 := make([]byte, 4)
 	n, err := io.ReadFull(in, head4)
 	if err != nil {
@@ -224,36 +273,38 @@ func Decode(input io.Reader) (File, error) {
 		return nil, io.EOF
 	}
 
-	// The following 4 bytes are the length of the first chunk
-	// We will use them to detect the byte order
+	// Peek next 4 bytes to detect byte order from first chunk length
 	chunkSize, err := in.Peek(4)
 	if err != nil {
 		return nil, err
 	}
 	var byteOrder binary.ByteOrder
-	// Assume all chunks have size < 64K
 	if chunkSize[0] == 0 && chunkSize[1] == 0 && (chunkSize[2] != 0 || chunkSize[3] != 0) {
 		byteOrder = binary.BigEndian
 	} else {
 		byteOrder = binary.LittleEndian
 	}
 
-	return &decoder{key: key, input: in, byteOrder: byteOrder}, nil
+	return &decoder{
+		key:       key,
+		input:     in,
+		byteOrder: byteOrder,
+		chunk:     make([]byte, 4096),
+	}, nil
 }
 
 // Read is the PlainText reader.
 func (d *decoder) Read(buf []byte) (n int, err error) {
 	if len(buf) == 0 {
-		return
+		return 0, nil
 	}
 	if len(d.buffer) > 0 {
 		n = copy(buf, d.buffer)
 		d.buffer = d.buffer[n:]
-		return
+		return n, nil
 	}
 	var size int32
 	for {
-		// Read a new chunk size
 		if err = binary.Read(d.input, d.byteOrder, &size); err != nil {
 			return 0, err
 		}
@@ -261,10 +312,18 @@ func (d *decoder) Read(buf []byte) (n int, err error) {
 			break
 		}
 	}
-	if size < 0 || int(size) > len(d.chunk) || size%aes.BlockSize != 0 {
-		return 0, fmt.Errorf("invalid block size: %d", size)
+	if size <= 0 || int(size) > MaxChunkSize || size%aes.BlockSize != 0 {
+		return 0, fmt.Errorf("%w (size=%d)", ErrInvalidBlockSize, size)
 	}
-	n, err = io.ReadFull(d.input, d.chunk[:size])
+
+	// Dynamic slice allocation with capacity reuse
+	if cap(d.chunk) < int(size) {
+		d.chunk = make([]byte, size)
+	} else {
+		d.chunk = d.chunk[:size]
+	}
+
+	n, err = io.ReadFull(d.input, d.chunk)
 	if err != nil {
 		return 0, err
 	}
@@ -274,47 +333,45 @@ func (d *decoder) Read(buf []byte) (n int, err error) {
 
 	blockCipher := d.key.cipher()
 
-	// Each 16-bytes block is decoded with a null IV
-	d.buffer = d.chunk[:size]
+	// Decrypt each 16-byte block using a null IV (MySQL's block decryption convention)
+	var zeroIV [aes.BlockSize]byte
 	for i := 0; i < int(size); i += aes.BlockSize {
-		cbc := cipher.NewCBCDecrypter(blockCipher, make([]byte, aes.BlockSize))
+		cbc := cipher.NewCBCDecrypter(blockCipher, zeroIV[:])
 		b := d.chunk[i : i+aes.BlockSize]
 		cbc.CryptBlocks(b, b)
 	}
 
-	// Remove PKCS#7 padding
-	padding := d.buffer[len(d.buffer)-1]
-	if padding > 0 && padding <= aes.BlockSize && int(padding) <= len(d.buffer) {
-		valid := true
-		for _, c := range d.buffer[len(d.buffer)-int(padding):] {
-			if c != padding {
-				valid = false
-				break
-			}
-		}
-		if valid {
-			d.buffer = d.buffer[:len(d.buffer)-int(padding)]
+	// Validate and remove PKCS#7 padding
+	d.buffer = d.chunk[:size]
+	padding := int(d.buffer[len(d.buffer)-1])
+	if padding <= 0 || padding > aes.BlockSize || padding > len(d.buffer) {
+		return 0, ErrInvalidPadding
+	}
+	for _, c := range d.buffer[len(d.buffer)-padding:] {
+		if int(c) != padding {
+			return 0, ErrInvalidPadding
 		}
 	}
+	d.buffer = d.buffer[:len(d.buffer)-padding]
 
 	n = copy(buf, d.buffer)
 	d.buffer = d.buffer[n:]
-	return
+	return n, nil
 }
 
-// Encode writes a mylogin.cnf content encrypted
+// Encode writes mylogin.cnf content encrypted.
 func Encode(w io.Writer, f File) (err error) {
 	key := f.Key()
 	if key.IsZero() {
-		return errors.New("key is not initialized")
+		return ErrKeyNotInitialized
 	}
 
 	// Header: 4 null bytes + 20-byte key
 	if _, err = w.Write([]byte{0, 0, 0, 0}); err != nil {
-		return
+		return err
 	}
 	if _, err = w.Write(key[:]); err != nil {
-		return
+		return err
 	}
 
 	blockCipher := key.cipher()
@@ -325,10 +382,10 @@ func Encode(w io.Writer, f File) (err error) {
 		byteOrder = binary.LittleEndian
 	}
 
+	var zeroIV [aes.BlockSize]byte
 	for scanner.Scan() {
 		line := scanner.Bytes()
-		// Re-append newline
-		l := len(line) + 1
+		l := len(line) + 1 // +1 for newline
 		paddedLen := ((l + aes.BlockSize) / aes.BlockSize) * aes.BlockSize
 		padCount := byte(paddedLen - l)
 
@@ -340,34 +397,66 @@ func Encode(w io.Writer, f File) (err error) {
 		}
 
 		for i := 0; i < paddedLen; i += aes.BlockSize {
-			cbc := cipher.NewCBCEncrypter(blockCipher, make([]byte, aes.BlockSize))
+			cbc := cipher.NewCBCEncrypter(blockCipher, zeroIV[:])
 			b := chunk[i : i+aes.BlockSize]
 			cbc.CryptBlocks(b, b)
 		}
 
 		if err = binary.Write(w, byteOrder, int32(paddedLen)); err != nil {
-			return
+			return err
 		}
 		if _, err = w.Write(chunk); err != nil {
-			return
+			return err
 		}
 	}
 
 	return scanner.Err()
 }
 
-// WriteFile writes plaintext configuration to an encrypted file at path with 0600 permissions.
+// WriteFile safely and atomically writes plaintext configuration to an encrypted file with 0600 permissions.
 func WriteFile(filename string, plainText io.Reader) error {
 	key, err := NewKey(rand.Read)
 	if err != nil {
 		return fmt.Errorf("failed to generate key: %w", err)
 	}
 
-	f, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-	if err != nil {
-		return err
+	dir := filepath.Dir(filename)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
 	}
-	defer f.Close()
 
-	return Encode(f, NewFile(key, binary.LittleEndian, plainText))
+	// Write to temporary file in the same directory for atomic rename
+	tmp, err := os.CreateTemp(dir, ".mylogin-*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = os.Remove(tmpName)
+	}()
+
+	if err := os.Chmod(tmpName, 0600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to set temp file permissions: %w", err)
+	}
+
+	if err := Encode(tmp, NewFile(key, binary.LittleEndian, plainText)); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to encode: %w", err)
+	}
+
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to sync temp file: %w", err)
+	}
+
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("failed to close temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpName, filename); err != nil {
+		return fmt.Errorf("failed to atomically rename temp file to %s: %w", filename, err)
+	}
+
+	return os.Chmod(filename, 0600)
 }
