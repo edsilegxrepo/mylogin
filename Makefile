@@ -23,8 +23,10 @@ coverage: ## Calculate unit test coverage without polluting repo
 	$(GO) tool cover -func="$$COV" && \
 	rm -f "$$COV"
 
-vet: ## Run go vet analysis
+vet: ## Run static analysis (go vet, govulncheck, gosec)
 	$(GO) vet ./...
+	govulncheck ./...
+	gosec ./...
 
 fmt: ## Format Go source code with gofumpt
 	gofumpt -l -w .

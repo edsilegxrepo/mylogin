@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -148,7 +149,8 @@ func ReadLogin(filename string, sectionNames []string) (login *Login, err error)
 
 // ReadSections reads all Sections of a mylogin.cnf file.
 func ReadSections(filename string) (sections Sections, err error) {
-	f, err := os.Open(filename)
+	cleanPath := filepath.Clean(filename)
+	f, err := os.Open(cleanPath) // #nosec G304 -- library intentionally reads caller-specified configuration path
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +419,11 @@ func Encode(w io.Writer, f File) (err error) {
 
 		l := len(line) + 1 // +1 for newline
 		paddedLen := ((l + aes.BlockSize) / aes.BlockSize) * aes.BlockSize
-		padCount := byte(paddedLen - l)
+		padDiff := paddedLen - l
+		if padDiff <= 0 || padDiff > aes.BlockSize {
+			return errors.New("invalid padding calculation")
+		}
+		padCount := byte(padDiff)
 
 		chunk := make([]byte, paddedLen)
 		copy(chunk, line)
@@ -432,6 +438,9 @@ func Encode(w io.Writer, f File) (err error) {
 			cbc.CryptBlocks(b, b)
 		}
 
+		if paddedLen > math.MaxInt32 {
+			return errors.New("chunk size exceeds maximum int32")
+		}
 		if err = binary.Write(w, byteOrder, int32(paddedLen)); err != nil {
 			return err
 		}
@@ -466,17 +475,17 @@ func WriteFile(filename string, plainText io.Reader) error {
 	}()
 
 	if err := os.Chmod(tmpName, 0o600); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("failed to set temp file permissions: %w", err)
 	}
 
 	if err := Encode(tmp, NewFile(key, binary.LittleEndian, plainText)); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("failed to encode: %w", err)
 	}
 
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("failed to sync temp file: %w", err)
 	}
 

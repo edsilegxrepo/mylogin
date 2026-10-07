@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"text/template"
@@ -290,7 +291,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 	} else {
-		file, err := os.Open(filename)
+		cleanPath := filepath.Clean(filename)
+		file, err := os.Open(cleanPath) // #nosec G304 -- CLI utility intentionally reads user-specified path
 		if err != nil {
 			if os.IsNotExist(err) || os.IsPermission(err) {
 				fmt.Fprintf(stderr, "mylogin: file error: %v\n", err)
