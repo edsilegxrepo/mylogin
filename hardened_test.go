@@ -36,6 +36,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -209,7 +210,7 @@ func TestWriteFileHelper(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Stat failed: %v", err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Errorf("expected 0600 permissions, got %o", info.Mode().Perm())
 	}
 
@@ -244,6 +245,9 @@ func TestFilterSectionResilience(t *testing.T) {
 }
 
 func TestCheckPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping POSIX permission test on Windows")
+	}
 	tempDir := t.TempDir()
 	safeFile := filepath.Join(tempDir, "safe.cnf")
 	unsafeFile := filepath.Join(tempDir, "unsafe.cnf")
@@ -322,8 +326,8 @@ func TestInvalidPaddingError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile failed: %v", err)
 	}
-	// Corrupt the last byte of the ciphertext chunk
-	data[len(data)-1] ^= 0xFF
+	// Corrupt chunk length header to an invalid non-block-aligned size
+	data[24] = 0x07
 	if err := os.WriteFile(filePath, data, 0o600); err != nil {
 		t.Fatalf("WriteFile corrupted failed: %v", err)
 	}
@@ -406,5 +410,65 @@ func TestDSNInjectionDefense(t *testing.T) {
 
 	if cfg.User != "alice" || cfg.Passwd != "pass@word:special" || cfg.Addr != "db.internal:3306" {
 		t.Errorf("parsed DSN values mismatch: %+v", cfg)
+	}
+}
+
+func TestDecoderRead_EdgeCases(t *testing.T) {
+	tempDir := t.TempDir()
+	confPath := filepath.Join(tempDir, ".mylogin.cnf")
+	rawContent := "[client]\nhost = 127.0.0.1\n"
+	if err := mylogin.WriteFile(confPath, strings.NewReader(rawContent)); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	f, err := os.Open(confPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	dec, err := mylogin.Decode(f)
+	if err != nil {
+		t.Fatalf("Decode failed: %v", err)
+	}
+
+	reader := dec.PlainText()
+
+	// 1. Read with zero-length buffer must return (0, nil)
+	n, err := reader.Read(make([]byte, 0))
+	if n != 0 || err != nil {
+		t.Errorf("expected (0, nil) for empty buffer, got (%d, %v)", n, err)
+	}
+
+	// 2. Read with small buffer (1 byte) to exercise residual buffer handling
+	smallBuf := make([]byte, 1)
+	n, err = reader.Read(smallBuf)
+	if n != 1 || err != nil {
+		t.Fatalf("expected 1 byte read, got (%d, %v)", n, err)
+	}
+
+	// 3. Second read should pull from internal residual buffer
+	secondBuf := make([]byte, 2)
+	n, err = reader.Read(secondBuf)
+	if n != 2 || err != nil {
+		t.Fatalf("expected 2 bytes read from residual buffer, got (%d, %v)", n, err)
+	}
+}
+
+func TestReadClientDefaults_InvalidPath(t *testing.T) {
+	// An invalid path containing a null byte triggers an os.Open error that is not ErrNotExist
+	_, err := mylogin.ReadClientDefaults("bad\x00path")
+	if err == nil {
+		t.Error("expected error for path with null byte, got nil")
+	}
+}
+
+func TestLogin_LogValueSocket(t *testing.T) {
+	var l mylogin.Login
+	l.SetSocket("/var/run/mysqld/mysqld.sock")
+	val := l.LogValue()
+	str := val.String()
+	if !strings.Contains(str, "/var/run/mysqld/mysqld.sock") {
+		t.Errorf("expected socket in LogValue, got: %s", str)
 	}
 }

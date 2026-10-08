@@ -23,9 +23,10 @@ MySQL client utilities read obfuscated authentication credentials from `~/.mylog
 ### Primary Objectives
 
 1. **Native Pure-Go Implementation**: Execute reading, writing, and administrative operations on `.mylogin.cnf` without requiring MySQL client binaries (`mysql`, `mysql_config_editor`) or CGO dynamic libraries installed in the runtime container.
-2. **Plaintext DSN Elimination**: Provide direct `driver.Connector` and `sql.OpenDB` handles via [`Login.Open()`](./login.go#L358) and [`Login.Connector()`](./login.go#L348), preventing passwords from being exposed in Data Source Name (DSN) connection strings and downstream driver error logs.
+2. **Plaintext DSN Elimination**: Provide direct `driver.Connector` and `sql.OpenDB` handles via [`Login.Open()`](./login.go#L358) and [`Login.Connector()`](./login.go#L348), integrating full TLS/SSL, custom Root CAs (`ssl-ca`), and mutual TLS (`ssl-cert`, `ssl-key`) while preventing passwords from being exposed in Data Source Name (DSN) connection strings and downstream driver error logs.
 3. **Automated Credential Redaction**: Mask credentials by default in [`Login.String()`](./login.go#L317) and implement [`slog.LogValuer`](./login.go#L323) so that passing credential instances to structured logging systems (`log/slog`) never leaks passwords to log aggregators.
 4. **Resilience and Panic Immunity**: Ensure robust AST parsing that rejects malformed tokens, prevents nil pointer dereferences, handles arbitrary newline formats, and uses atomic temporary file replacement for zero-corruption file writes.
+5. **Cascading Option File Integration**: Automatically discover and merge user plaintext option files (`~/.my.cnf` on Unix/macOS, `%APPDATA%\MySQL\.my.cnf` on Windows) beneath encrypted `.mylogin.cnf` sections via [`ReadResolvedLogin`](./mylogin.go#L215), preserving MySQL CLI cascade conventions.
 
 *For architectural design choices, component block diagrams, and edge-case handling strategies, refer to [ARCHITECTURE.md § 1. Architecture, Design Choices, Assumptions, Edge Cases, and Efficiency](./ARCHITECTURE.md#1-architecture-design-choices-assumptions-edge-cases-and-efficiency).*
 
@@ -37,6 +38,8 @@ MySQL client utilities read obfuscated authentication credentials from `~/.mylog
 
 The module parses connection parameters from `.mylogin.cnf` and maps security configurations directly into `*mysql.Config` instances from [`github.com/go-sql-driver/mysql`](https://github.com/go-sql-driver/mysql):
 - `ssl-mode` parameters (`DISABLED`, `REQUIRED`, `VERIFY_CA`, `VERIFY_IDENTITY`) translate directly into driver TLS configurations.
+- `ssl-ca` automatically loads custom Root CAs from PEM files into dedicated `x509.CertPool` trust stores, supporting enterprise self-signed certificates with custom chain verification.
+- `ssl-cert` and `ssl-key` configure mutual TLS (mTLS) client certificate authentication via `tls.LoadX509KeyPair`.
 - Queries executed through handles returned by `Login.Open()` enforce encrypted TLS wire transport between the client process and MySQL.
 
 ### 2.2 Secret Management and Memory Sanitization
@@ -57,7 +60,7 @@ The module parses connection parameters from `.mylogin.cnf` and maps security co
 
 ## 3. Code Quality and Verification Summary
 
-- **Total Module Statement Coverage**: **94.3%** across all packages, verified with Go's data race detector (`-race`).
+- **Total Module Statement Coverage**: **93.2%** across core library statements and packages, verified with Go's data race detector (`-race`).
 - **Compiler Hardening**: Built with `-trimpath` and `-buildmode=pie` Position Independent Executables with stripped debug symbols (`-ldflags "-s -w"`).
 - **Code Standards**: 100% compliant with canonical `gofumpt` formatting, `go vet`, and `gosec` AST analysis.
 
@@ -150,6 +153,13 @@ Usage: mylogin-key [-version] [<file> ...]
 
 ---
 
+### 4.4 Diagnostic Utilities
+
+- [`cmd/mylogin-inspect`](./cmd/mylogin-inspect/main.go): Diagnostic tool inspecting option file discovery, resolved parameters, password presence, and extra configuration attributes.
+- [`cmd/mylogin-connect`](./cmd/mylogin-connect/main.go): Verification utility testing live end-to-end database connectivity and ping operations against configured target databases.
+
+---
+
 ## 5. Deployment and Usage Examples
 
 ### 5.1 Programmatic Go Integration
@@ -170,7 +180,7 @@ import (
 )
 
 func main() {
-	// 1. Read and merge global [client] options with [reporting_service] section
+	// 1. Read and cascade [client] options from .my.cnf, [client] from .mylogin.cnf, and [reporting_service] section
 	login, err := mylogin.Get("reporting_service")
 	if err != nil {
 		log.Fatalf("Failed to resolve login configuration: %v", err)

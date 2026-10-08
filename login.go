@@ -345,8 +345,18 @@ func (l *Login) LogValue() slog.Value {
 
 // Connector returns an official database/sql driver.Connector configured with these credentials.
 // It completely avoids serializing passwords into cleartext DSN strings, preventing credential disclosure in driver logs.
+// It automatically evaluates SSL options (ssl-mode, ssl-ca, ssl-cert, ssl-key) via configWithTLS() and registers
+// custom TLS configurations with the MySQL driver.
+//
+// Data Flow:
+//
+//	Login -> configWithTLS() -> mysql.Config (with TLSConfig profile) -> mysql.NewConnector -> driver.Connector
 func (l *Login) Connector(database string) (driver.Connector, error) {
-	cfg := l.Config()
+	// Construct driver configuration and apply TLS/mTLS parameters if specified in Login.Extra
+	cfg, err := l.configWithTLS()
+	if err != nil {
+		return nil, err
+	}
 	if database != "" {
 		cfg.DBName = database
 	}
@@ -355,6 +365,7 @@ func (l *Login) Connector(database string) (driver.Connector, error) {
 
 // Open creates and initializes an active *sql.DB directly using driver.Connector.
 // It provides a secure alternative to sql.Open("mysql", dsn) by preventing password leaks in DSN strings.
+// All TLS/mTLS encryption and certificate verification rules are applied via Connector.
 func (l *Login) Open(database string) (*sql.DB, error) {
 	connector, err := l.Connector(database)
 	if err != nil {

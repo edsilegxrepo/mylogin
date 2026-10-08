@@ -79,7 +79,7 @@ func ExampleLogin_Open() {
 		log.Printf("Failed to open connection handle: %v", err)
 		return
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 }
 
 // ExampleLogin_Config demonstrates fine-tuning MySQL driver connection parameters
@@ -123,7 +123,7 @@ func ExampleSections_WriteFile() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	targetFile := filepath.Join(tmpDir, ".mylogin.cnf")
 

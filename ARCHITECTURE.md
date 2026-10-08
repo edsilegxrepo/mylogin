@@ -14,10 +14,11 @@ The `mylogin` library provides serialization, deserialization, manipulation, and
 graph TD
     subgraph StorageLayer["Storage Layer (Filesystem)"]
         F1["~/.mylogin.cnf (AES-128-CBC with Zero IV)"]
+        F2["~/.my.cnf / %APPDATA%/MySQL/.my.cnf (Plaintext Client Defaults)"]
     end
 
     subgraph CoreCrypto["Cryptographic Transformation Layer"]
-        C1["mylogin.NewFile / ReadLogin / ReadSections"]
+        C1["mylogin.NewFile / ReadLogin / ReadSections / ReadResolvedLogin"]
         C2["Key Derivation & Validation (20-byte Key)"]
         C3["AES-128-CBC Cipher Engine (Zero IV)"]
         C4["PKCS#7 Padding Handler"]
@@ -27,6 +28,7 @@ graph TD
         P1["mylogin.Parse"]
         P2["mylogin.FilterSection (Stream Demux)"]
         P3["parseLine (Token Extractor)"]
+        P4["ReadClientDefaults (Plaintext Parser)"]
     end
 
     subgraph ModelLayer["Domain Model Layer"]
@@ -37,14 +39,18 @@ graph TD
 
     subgraph IntegrationLayer["Integration & Consumer Layer"]
         I1["Login.Open / Login.Connector (database/sql)"]
-        I2["Login.Config (*mysql.Config)"]
+        I2["Login.Config / configWithTLS (*mysql.Config)"]
         I3["Login.RedactedDSN (Telemetry / Logging)"]
         I4["cmd/mylogin (CLI Management Utility)"]
         I5["cmd/mylogin-dsn (DSN Formatter Utility)"]
         I6["cmd/mylogin-key (Key Inspection Utility)"]
+        I7["cmd/mylogin-inspect (Diagnostics)"]
+        I8["cmd/mylogin-connect (Connection Ping)"]
     end
 
     F1 -->|Raw Byte Stream| C1
+    F2 -->|Plaintext Stream| P4
+    P4 -->|Client Defaults| C1
     C1 --> C2
     C2 --> C3
     C3 --> C4
@@ -61,6 +67,8 @@ graph TD
     M1 --> I4
     M3 --> I5
     C2 --> I6
+    M3 --> I7
+    M3 --> I8
     M1 -->|Serialization & Encryption| C3
     C3 -->|Encrypted Output| F1
 ```
@@ -124,13 +132,18 @@ The operational life cycle consists of three primary workflows:
 
 ### 2.2 Component Relationships and Code Interfaces
 
-- [`mylogin.go`](./mylogin.go): Entry points for file reading (`Default()`, `Get()`, `Load()`), cipher initialization (`cipher()`), serialization (`Encode()`), and deserialization (`Decode()`).
+- [`mylogin.go`](./mylogin.go): Entry points for file reading (`Default()`, `Get()`, `Load()`, `ReadResolvedLogin()`), cipher initialization (`cipher()`), serialization (`Encode()`), and deserialization (`Decode()`).
+- [`clientdefaults.go`](./clientdefaults.go): Plaintext option file parser and cascade resolver (`DefaultOptionFile()`, `DefaultClientDefaults()`, `ReadClientDefaults()`).
+- [`defaultoptionfile.go`](./defaultoptionfile.go) / [`defaultoptionfile_windows.go`](./defaultoptionfile_windows.go): Platform-specific resolution for default MySQL plaintext option files (`~/.my.cnf` on POSIX, `%APPDATA%\MySQL\.my.cnf` on Windows).
 - [`login.go`](./login.go): Domain model for credentials (`Login`), DSN generator (`FormatDSN()`, `RedactedDSN()`), structured logger integration (`LogValue()`), and SQL driver attachment (`Connector()`, `Open()`).
+- [`login_tls.go`](./login_tls.go): Cryptographic TLS negotiation, custom Root CA cert pool management, peer certificate chain verification, and mutual TLS (mTLS) client certificate loader.
 - [`sections.go`](./sections.go): Collection model (`Sections`, `Section`) representing the configuration file AST. Supports section-level querying, deletion, insertion, deep cloning, and serialization to INI syntax.
 - [`filter.go`](./filter.go): Low-level stream adapter isolating targeted sections during streaming reads.
 - [`cmd/mylogin/main.go`](./cmd/mylogin/main.go): Pure-Go CLI implementing administrative subcommands (`set`, `remove`, `list`) and dump flags (`-json`, `-replay`, `-remove`, `-template`).
 - [`cmd/mylogin-dsn/main.go`](./cmd/mylogin-dsn/main.go): Command-line DSN generation utility.
 - [`cmd/mylogin-key/main.go`](./cmd/mylogin-key/main.go): Key inspection utility.
+- [`cmd/mylogin-inspect/main.go`](./cmd/mylogin-inspect/main.go): Diagnostic tool inspecting option file discovery and resolved connection keys.
+- [`cmd/mylogin-connect/main.go`](./cmd/mylogin-connect/main.go): Connectivity verification utility.
 
 ### 2.3 End-to-End Sequence Diagram
 
@@ -149,6 +162,8 @@ sequenceDiagram
 
     App->>API: mylogin.Get("production")
     activate API
+    API->>FS: Check ~/.my.cnf (Plaintext Client Defaults)
+    FS-->>API: Base [client] Options (or empty if absent)
     API->>FS: os.Stat(~/.mylogin.cnf) (Check Permissions 0600)
     FS-->>API: File Info OK
     API->>FS: os.Open(~/.mylogin.cnf)
@@ -164,7 +179,7 @@ sequenceDiagram
     API->>Parser: Parse(decryptedStream)
     activate Parser
     Parser->>Parser: Line-by-line tokenize sections & options
-    Parser->>Parser: Merge [client] default with [production]
+    Parser->>Parser: Cascade: .my.cnf [client] -> .mylogin.cnf [client] -> [production]
     Parser-->>Model: Populate Login Struct
     deactivate Parser
     API-->>App: *Login Instance
@@ -172,7 +187,7 @@ sequenceDiagram
 
     App->>Model: login.Open("app_db")
     activate Model
-    Model->>Model: Config() (Map User, Passwd, Host, Port, Socket, SSL)
+    Model->>Model: configWithTLS() (Map User, Pass, Host, TLS/CA/mTLS)
     Model->>Driver: mysql.NewConnector(cfg)
     Driver-->>Model: driver.Connector Handle
     Model->>Driver: sql.OpenDB(connector)
@@ -352,9 +367,11 @@ graph TD
 3. **Memory Exposure Containment**:
    - [`Key.Zero()`](./mylogin.go#L96) and [`Login.Zero()`](./login.go#L184) provide zeroing mechanisms. Applications processing credentials in long-lived services can explicitly invoke `Zero()` to scrub key bytes and password strings from heap memory immediately after establishing database connections.
 
-4. **Transport-Layer Security (TLS / SSL)**:
-   - Client options parsed from `.mylogin.cnf` (`ssl-mode`) are mapped directly into `mysql.Config.TLSConfig`:
-     - `DISABLED` -> `false`
-     - `REQUIRED` -> `true`
-     - `VERIFY_CA` / `VERIFY_IDENTITY` -> `custom` / driver TLS modes.
-   - Credentials decrypted from `.mylogin.cnf` are protected in transit between the host application and the remote MySQL server across untrusted enterprise networks.
+4. **Transport-Layer Security (TLS / SSL & mTLS)**:
+   - Client options parsed from `.mylogin.cnf` (`ssl-mode`, `ssl-ca`, `ssl-cert`, `ssl-key`) are mapped into `mysql.Config` via `configWithTLS()`:
+     - `DISABLED` -> Disables TLS (`TLSConfig = "false"`).
+     - `REQUIRED` -> Enforces encrypted wire transport (`InsecureSkipVerify = true`).
+     - `VERIFY_CA` -> Loads custom Root CAs into dedicated `x509.CertPool` and verifies server certificate chains without requiring hostname match.
+     - `VERIFY_IDENTITY` -> Enforces full certificate chain and hostname/SAN validation against CA roots.
+     - Mutual TLS (mTLS): When `ssl-cert` and `ssl-key` are configured, client certificates are loaded via `tls.LoadX509KeyPair` and registered dynamically via `mysql.RegisterTLSConfig("mylogin_tls_<N>", tlsCfg)`.
+   - Credentials and traffic are strictly protected in transit between the host application and the remote MySQL server across untrusted enterprise networks.

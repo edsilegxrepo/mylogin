@@ -32,6 +32,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -133,17 +134,16 @@ func TestCoreCoverageBoost(t *testing.T) {
 	}
 
 	// 4. Test DefaultFile with environment override
-	origEnv := os.Getenv("MYSQL_TEST_LOGIN_FILE")
-	defer os.Setenv("MYSQL_TEST_LOGIN_FILE", origEnv)
-
 	tempDir := t.TempDir()
 	customPath := filepath.Join(tempDir, "custom.cnf")
-	os.Setenv("MYSQL_TEST_LOGIN_FILE", customPath)
+	t.Setenv("MYSQL_TEST_LOGIN_FILE", customPath)
 	if mylogin.DefaultFile() != customPath {
 		t.Errorf("expected DefaultFile to respect MYSQL_TEST_LOGIN_FILE")
 	}
 
-	os.Unsetenv("MYSQL_TEST_LOGIN_FILE")
+	if err := os.Unsetenv("MYSQL_TEST_LOGIN_FILE"); err != nil {
+		t.Fatalf("failed to unset MYSQL_TEST_LOGIN_FILE: %v", err)
+	}
 	defPath := mylogin.DefaultFile()
 	if defPath == "" {
 		t.Errorf("expected platformDefaultFile, got empty string")
@@ -204,9 +204,10 @@ func TestCoreCoverageBoost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Open failed: %v", err)
 	}
+	defer func() { _ = f.Close() }()
 	decFile, err := mylogin.Decode(f)
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		t.Fatalf("Decode failed: %v", err)
 	}
 
@@ -231,7 +232,7 @@ func TestCoreCoverageBoost(t *testing.T) {
 			t.Errorf("Close failed: %v", err)
 		}
 	} else {
-		f.Close()
+		_ = f.Close()
 	}
 
 	// 10. Test CheckPermissions error path
@@ -257,11 +258,13 @@ func TestCoreCoverageBoost(t *testing.T) {
 	if err := mylogin.WriteFile(impossibleDirFile, strings.NewReader("[client]\n")); err == nil {
 		t.Errorf("expected WriteFile to fail with invalid dir path")
 	}
-	readOnlyDir := filepath.Join(tempDir, "readonly_dir")
-	if err := os.MkdirAll(readOnlyDir, 0o500); err == nil {
-		defer func() { _ = os.Chmod(readOnlyDir, 0o700) }()
-		if err := mylogin.WriteFile(filepath.Join(readOnlyDir, "test.cnf"), strings.NewReader("[client]\n")); err == nil {
-			t.Errorf("expected WriteFile to fail in read-only directory")
+	if runtime.GOOS != "windows" {
+		readOnlyDir := filepath.Join(tempDir, "readonly_dir")
+		if err := os.MkdirAll(readOnlyDir, 0o500); err == nil {
+			defer func() { _ = os.Chmod(readOnlyDir, 0o700) }()
+			if err := mylogin.WriteFile(filepath.Join(readOnlyDir, "test.cnf"), strings.NewReader("[client]\n")); err == nil {
+				t.Errorf("expected WriteFile to fail in read-only directory")
+			}
 		}
 	}
 	existingDirAsTarget := filepath.Join(tempDir, "existing_dir_target")
@@ -454,7 +457,7 @@ func TestLoginConnectorAndOpen(t *testing.T) {
 	if db == nil {
 		t.Fatalf("expected non-nil *sql.DB")
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 }
 
 func TestExtendedConfigOptionMapping(t *testing.T) {
@@ -494,9 +497,7 @@ func TestTopLevelConvenienceAndSectionsWriteFile(t *testing.T) {
 	tempDir := t.TempDir()
 	confPath := filepath.Join(tempDir, ".mylogin.cnf")
 
-	origEnv := os.Getenv("MYSQL_TEST_LOGIN_FILE")
-	defer os.Setenv("MYSQL_TEST_LOGIN_FILE", origEnv)
-	os.Setenv("MYSQL_TEST_LOGIN_FILE", confPath)
+	t.Setenv("MYSQL_TEST_LOGIN_FILE", confPath)
 
 	var secs mylogin.Sections
 	var clientSec mylogin.Login

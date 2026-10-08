@@ -70,7 +70,7 @@ func testFileKeyBits(t *testing.T, mysql_config_editor string, filename string) 
 		t.Fatalf("%s: %s", os.DevNull, err)
 	}
 	cmd.Stderr = os.Stderr
-	defer os.Remove(filename)
+	defer func() { _ = os.Remove(filename) }()
 
 	err = cmd.Run()
 	if err != nil {
@@ -81,7 +81,7 @@ func testFileKeyBits(t *testing.T, mysql_config_editor string, filename string) 
 	if err != nil {
 		t.Fatalf("%s: %s", filename, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	file, err := mylogin.Decode(bufio.NewReader(f))
 	if err != nil {

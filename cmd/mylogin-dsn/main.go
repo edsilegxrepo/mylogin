@@ -45,10 +45,10 @@ var version = "dev"
 // writing an informative message to stderr and returning the appropriate process exit code.
 func handleFileError(cmd string, err error, stderr io.Writer) int {
 	if os.IsNotExist(err) || os.IsPermission(err) {
-		fmt.Fprintf(stderr, "%s: file error: %v\n", cmd, err)
+		printFmt(stderr, "%s: file error: %v\n", cmd, err)
 		return exitFileError
 	}
-	fmt.Fprintf(stderr, "%s: decryption/parse error: %v\n", cmd, err)
+	printFmt(stderr, "%s: decryption/parse error: %v\n", cmd, err)
 	return exitFormatError
 }
 
@@ -73,7 +73,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	flags.StringVar(&filename, "file", mylogin.DefaultFile(), "path to .mylogin.cnf")
 	flags.BoolVar(&showVersion, "version", false, "display version and exit")
 	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: mylogin-dsn [-file <path>] [-database <dbname>] [<section> ...]\n")
+		printFmt(stderr, "Usage: mylogin-dsn [-file <path>] [-database <dbname>] [<section> ...]\n")
 		flags.PrintDefaults()
 	}
 
@@ -82,7 +82,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if showVersion {
-		fmt.Fprintf(stdout, "mylogin-dsn version %s\n", version)
+		printFmt(stdout, "mylogin-dsn version %s\n", version)
 		return exitSuccess
 	}
 
@@ -99,12 +99,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if login.IsEmpty() {
-		fmt.Fprintf(stderr, "mylogin-dsn: no credentials found for sections: %v\n", sections)
+		printFmt(stderr, "mylogin-dsn: no credentials found for sections: %v\n", sections)
 		return exitNotFound
 	}
 
-	fmt.Fprintln(stdout, login.FormatDSN(database))
+	printLine(stdout, login.FormatDSN(database))
 	return exitSuccess
+}
+
+func printLine(w io.Writer, a ...any) {
+	_, _ = fmt.Fprintln(w, a...)
+}
+
+func printFmt(w io.Writer, format string, a ...any) {
+	_, _ = fmt.Fprintf(w, format, a...)
 }
 
 func main() {

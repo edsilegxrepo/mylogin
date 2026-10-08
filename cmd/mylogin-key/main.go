@@ -48,7 +48,7 @@ func printKey(w io.Writer, key mylogin.Key) {
 	// If any byte violates the 5-bit constraint (>= 32), print raw 20-byte hex dump
 	for _, b := range key {
 		if b >= 32 {
-			fmt.Fprintf(w, "%X\n", key)
+			printFmt(w, "%X\n", key)
 			return
 		}
 	}
@@ -73,7 +73,7 @@ func printKey(w io.Writer, key mylogin.Key) {
 	b64 := base64.RawURLEncoding.EncodeToString(compactKey[:])[:(len(key)*5+5)/6]
 
 	const hex = "0123456789ABCDEF"
-	fmt.Fprintf(w, "%X%c %s\n",
+	printFmt(w, "%X%c %s\n",
 		compactKey[:len(compactKey)-1], hex[compactKey[len(compactKey)-1]>>4],
 		b64)
 }
@@ -93,7 +93,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	var showVersion bool
 	flags.BoolVar(&showVersion, "version", false, "display version and exit")
 	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: mylogin-key [<file> ...]\n")
+		printFmt(stderr, "Usage: mylogin-key [<file> ...]\n")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -101,7 +101,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if showVersion {
-		fmt.Fprintf(stdout, "mylogin-key version %s\n", version)
+		printFmt(stdout, "mylogin-key version %s\n", version)
 		return exitSuccess
 	}
 
@@ -117,7 +117,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		cleanPath := filepath.Clean(filename)
 		f, err := os.Open(cleanPath) // #nosec G304 -- CLI utility intentionally reads user-specified path
 		if err != nil {
-			fmt.Fprintf(stderr, "mylogin-key: cannot open %s: %v\n", filename, err)
+			printFmt(stderr, "mylogin-key: cannot open %s: %v\n", filename, err)
 			hadError = true
 			continue
 		}
@@ -125,7 +125,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		file, err := mylogin.Decode(bufio.NewReader(f))
 		_ = f.Close()
 		if err != nil {
-			fmt.Fprintf(stderr, "mylogin-key: decode failed for %s: %v\n", filename, err)
+			printFmt(stderr, "mylogin-key: decode failed for %s: %v\n", filename, err)
 			hadError = true
 			continue
 		}
@@ -137,6 +137,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitFileError
 	}
 	return exitSuccess
+}
+
+func printFmt(w io.Writer, format string, a ...any) {
+	_, _ = fmt.Fprintf(w, format, a...)
 }
 
 func main() {

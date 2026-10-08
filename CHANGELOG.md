@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v1.6.0] - 2026-10-08
+
+### Overview
+Version 1.6.0 introduces automatic cascading resolution for plaintext MySQL client option files (`.my.cnf`), comprehensive TLS/SSL configuration with custom Certificate Authorities (CA) and mutual TLS (mTLS) client authentication directly in the database driver connector, cross-platform path resolution supporting Microsoft Windows, and new diagnostic inspection utilities.
+
+### Added
+
+#### Plaintext Option File Integration (`.my.cnf`)
+- **Cascading Configuration Resolution**: Added [`mylogin.ReadResolvedLogin(myloginFile, optionFile string, sectionNames []string)`](./mylogin.go) implementing a 3-tier hierarchical configuration merge:
+  1. Plaintext `.my.cnf` `[client]` options (base defaults)
+  2. Encrypted `.mylogin.cnf` `[client]` options (overrides plaintext)
+  3. Encrypted `.mylogin.cnf` target section options (highest priority)
+- **Automatic Default File Discovery**: Added [`mylogin.DefaultOptionFile()`](./clientdefaults.go) to locate the user's plaintext option file via `MYSQL_TEST_OPTION_FILE` or operating system defaults:
+  - Unix / macOS: `~/.my.cnf` via [`defaultoptionfile.go`](./defaultoptionfile.go)
+  - Windows: `%APPDATA%\MySQL\.my.cnf` with roaming user profile fallback via [`defaultoptionfile_windows.go`](./defaultoptionfile_windows.go)
+- **Client Defaults API**: Added [`mylogin.DefaultClientDefaults()`](./clientdefaults.go) and [`mylogin.ReadClientDefaults(filename string)`](./clientdefaults.go) to parse `[client]` options from plaintext configuration files, gracefully returning an empty `Login` if the file does not exist.
+- **Seamless Top-Level Resolution**: Updated [`mylogin.Default()`](./mylogin.go) and [`mylogin.Get(section string)`](./mylogin.go) to automatically invoke `ReadResolvedLogin`, ensuring existing applications transparently inherit system-wide `.my.cnf` client defaults.
+
+#### Driver TLS / SSL & Mutual TLS (mTLS)
+- **Cryptographic TLS Negotiation**: Extended [`Login.Connector(database string)`](./login.go) to automatically configure and register TLS connection parameters using [`Login.configWithTLS()`](./login_tls.go).
+- **SSL Mode Support**: Full compliance with MySQL `ssl-mode` directives:
+  - `DISABLED`: Disables TLS encryption (`TLSConfig = "false"`).
+  - `REQUIRED`: Enforces encrypted transport with `InsecureSkipVerify = true`.
+  - `VERIFY_CA`: Validates server certificate chains against custom CA root pools without requiring hostname verification.
+  - `VERIFY_IDENTITY`: Full cryptographic validation of certificate chains and Subject Alternative Names (SAN) / hostname matching.
+- **Custom Certificate Authority (CA)**: Added `ssl-ca` parsing in [`loadRootCAs`](./login_tls.go) to construct dedicated `x509.CertPool` trust stores from custom PEM files.
+- **Mutual TLS (mTLS) Client Authentication**: Added `ssl-cert` and `ssl-key` pairing via `tls.LoadX509KeyPair` to present client certificates for two-way authenticated database clusters.
+- **Deterministic TLS Registration**: Implemented thread-safe, deterministic SHA-256 hash-based TLS profile caching and registration with `mysql.RegisterTLSConfig`, preventing duplicate registrations and unbounded memory leaks in driver registries.
+
+#### Tooling & Diagnostics
+- **Connection Test Utility**: Added [`cmd/mylogin-connect`](./cmd/mylogin-connect/main.go) for verifying end-to-end driver connection, dry-run connector creation, and ping operations against configured target databases.
+- **Inspection Diagnostic Utility**: Added [`cmd/mylogin-inspect`](./cmd/mylogin-inspect/main.go) to inspect default option file discovery, resolved connection parameters, password status, and active `Extra` configuration keys.
+
+#### Test Suite & Verification
+- **Cascade Precedence Tests**: Implemented [`clientdefaults_test.go`](./clientdefaults_test.go) verifying missing file resilience, empty path handling, plaintext client inheritance, and encrypted section override hierarchies.
+- **TLS & mTLS Verification**: Implemented [`login_tls_test.go`](./login_tls_test.go) and [`login_tls_internal_test.go`](./login_tls_internal_test.go) asserting missing key validation errors on partial mTLS configurations, deterministic cache reuse, system root fallback for `VERIFY_CA`, and in-memory PKI verification.
+- **Diagnostic CLI Test Suites**: Implemented comprehensive CLI unit test suites in [`cmd/mylogin-inspect/main_test.go`](./cmd/mylogin-inspect/main_test.go) and [`cmd/mylogin-connect/main_test.go`](./cmd/mylogin-connect/main_test.go).
+
+---
+
 ## [v1.5.0] - 2026-10-07
 
 ### Overview
@@ -84,6 +124,7 @@ Version 1.5.0 marks a major enterprise hardening and modernization milestone fol
 - INI section tokenization and basic DSN formatting for `go-sql-driver/mysql`.
 
 <!-- Release Link Definitions -->
+[v1.6.0]: https://github.com/edsilegxrepo/mylogin/releases/tag/v1.6.0
 [v1.5.0]: https://github.com/edsilegxrepo/mylogin/releases/tag/v1.5.0
 [v1.1.0]: https://github.com/dolmen-go/mylogin/releases/tag/v1.1.0
 [v1.0.0]: https://github.com/dolmen-go/mylogin/releases/tag/v1.0.0

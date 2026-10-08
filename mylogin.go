@@ -173,16 +173,20 @@ func CheckPermissions(filename string) error {
 	return nil
 }
 
-// Default reads and merges the default [client] section from DefaultFile().
-// It returns an initialized Login struct, or an error if file decoding or parsing fails.
+// Default reads the resolved default [client] connection view.
+// It automatically incorporates [client] defaults from the plaintext MySQL option file when present,
+// then overlays [client] values from the encrypted login file.
 func Default() (*Login, error) {
-	return ReadLogin(DefaultFile(), []string{DefaultSection})
+	return ReadResolvedLogin(DefaultFile(), DefaultOptionFile(), []string{DefaultSection})
 }
 
-// Get reads credentials for a specific section merged with [client] from DefaultFile().
-// Options in the specified section override options defined in [client].
+// Get reads the resolved connection view for a specific login-path section.
+// Merge precedence is:
+// 1. plaintext option file [client]
+// 2. encrypted login file [client]
+// 3. encrypted login file [section]
 func Get(section string) (*Login, error) {
-	return ReadLogin(DefaultFile(), []string{DefaultSection, section})
+	return ReadResolvedLogin(DefaultFile(), DefaultOptionFile(), []string{DefaultSection, section})
 }
 
 // Load reads all sections from DefaultFile().
@@ -203,6 +207,39 @@ func ReadLogin(filename string, sectionNames []string) (login *Login, err error)
 	return login, nil
 }
 
+// ReadResolvedLogin reads the encrypted login file and automatically applies plaintext [client]
+// defaults from the provided option file when present.
+// Merge precedence is:
+// 1. plaintext option file [client]
+// 2. encrypted login file sections in the order supplied by sectionNames
+//
+// Data Flow:
+//
+//	optionFile [client] -> *Login base -> overlay myloginFile [sectionNames...] -> *Login resolved
+func ReadResolvedLogin(myloginFile, optionFile string, sectionNames []string) (*Login, error) {
+	// 1. Load foundational defaults from plaintext option file (e.g., ~/.my.cnf)
+	base, err := ReadClientDefaults(optionFile)
+	if err != nil {
+		return nil, err
+	}
+	if base == nil {
+		base = &Login{}
+	}
+	resolved := base.Clone()
+
+	// 2. Read requested sections from the encrypted .mylogin.cnf file
+	login, err := ReadLogin(myloginFile, sectionNames)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Overlay encrypted section values on top of plaintext defaults
+	if login != nil {
+		resolved.Merge(login)
+	}
+	return resolved, nil
+}
+
 // ReadSections reads all Sections of a mylogin.cnf file.
 // The file path is cleaned, opened, decoded from AES-128-CBC, and parsed into Sections.
 func ReadSections(filename string) (sections Sections, err error) {
@@ -211,7 +248,7 @@ func ReadSections(filename string) (sections Sections, err error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	file, err := Decode(bufio.NewReader(f))
 	if err != nil {
@@ -309,6 +346,7 @@ type decoder struct {
 	cipher    cipher.Block     // Cached AES cipher block to avoid key expansion on every chunk
 
 	input  io.Reader // Underlying encrypted byte stream
+	closer io.Closer // Optional underlying closer if input implements io.Closer
 	chunk  []byte    // Dynamic buffer allocated for ciphertext chunks
 	buffer []byte    // Slice pointing to residual unconsumed decrypted bytes
 }
@@ -335,12 +373,20 @@ func (d *decoder) Parse() (Sections, error) {
 
 // Close securely wipes memory and closes the underlying reader if it implements io.Closer.
 // Ensures sensitive key material and ciphertext buffers are zeroed upon completion.
+// Also releases filesystem locks by closing the underlying input stream (e.g., on Windows NTFS).
 func (d *decoder) Close() error {
+	// 1. Zero out cryptographic key material and ciphertext buffers
 	d.key.Zero()
 	for i := range d.chunk {
 		d.chunk[i] = 0
 	}
 	d.buffer = nil
+
+	// 2. Close explicit underlying stream handle if captured
+	if d.closer != nil {
+		return d.closer.Close()
+	}
+	// 3. Fallback closure if input implements io.Closer directly
 	if closer, ok := d.input.(io.Closer); ok {
 		return closer.Close()
 	}
@@ -391,9 +437,15 @@ func Decode(input io.Reader) (File, error) {
 	// Pre-initialize and cache block cipher to avoid re-generating key schedule on every chunk
 	blockCipher := key.cipher()
 
+	var closer io.Closer
+	if c, ok := input.(io.Closer); ok {
+		closer = c
+	}
+
 	return &decoder{
 		key:       key,
 		input:     in,
+		closer:    closer,
 		byteOrder: byteOrder,
 		cipher:    blockCipher,
 		chunk:     make([]byte, 4096),

@@ -145,10 +145,10 @@ func (formatRemove) Print(w io.Writer, section *mylogin.Section) error {
 // writing an informative message to stderr and returning the appropriate process exit code.
 func handleFileError(cmd string, err error, stderr io.Writer) int {
 	if os.IsNotExist(err) || os.IsPermission(err) {
-		fmt.Fprintf(stderr, "%s: file error: %v\n", cmd, err)
+		printFmt(stderr, "%s: file error: %v\n", cmd, err)
 		return exitFileError
 	}
-	fmt.Fprintf(stderr, "%s: decryption/parse error: %v\n", cmd, err)
+	printFmt(stderr, "%s: decryption/parse error: %v\n", cmd, err)
 	return exitFormatError
 }
 
@@ -307,11 +307,11 @@ func runSet(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if plainPassword != "" {
 		password = plainPassword
 	} else if promptPassword {
-		fmt.Fprintf(stderr, "Enter password: ")
+		printFmt(stderr, "Enter password: ")
 		var err error
 		password, err = readPassword(stdin)
 		if err != nil {
-			fmt.Fprintf(stderr, "mylogin: failed to read password: %v\n", err)
+			printFmt(stderr, "mylogin: failed to read password: %v\n", err)
 			return exitGeneral
 		}
 	}
@@ -321,7 +321,7 @@ func runSet(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if _, err := os.Stat(cleanPath); err == nil {
 		sections, err = mylogin.ReadSections(cleanPath)
 		if err != nil {
-			fmt.Fprintf(stderr, "mylogin: failed to read existing file: %v\n", err)
+			printFmt(stderr, "mylogin: failed to read existing file: %v\n", err)
 			return exitFormatError
 		}
 	}
@@ -348,7 +348,7 @@ func runSet(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	sections.Set(loginPath, *login)
 	if err := sections.WriteFile(cleanPath); err != nil {
-		fmt.Fprintf(stderr, "mylogin: failed to write %s: %v\n", cleanPath, err)
+		printFmt(stderr, "mylogin: failed to write %s: %v\n", cleanPath, err)
 		return exitFileError
 	}
 
@@ -374,24 +374,24 @@ func runRemove(args []string, stdout, stderr io.Writer) int {
 		loginPath = flags.Arg(0)
 	}
 	if loginPath == "" {
-		fmt.Fprintf(stderr, "mylogin: remove requires a login path name\n")
+		printFmt(stderr, "mylogin: remove requires a login path name\n")
 		return exitUsage
 	}
 
 	cleanPath := filepath.Clean(filename)
 	sections, err := mylogin.ReadSections(cleanPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "mylogin: failed to read %s: %v\n", cleanPath, err)
+		printFmt(stderr, "mylogin: failed to read %s: %v\n", cleanPath, err)
 		return exitFileError
 	}
 
 	if !sections.Delete(loginPath) {
-		fmt.Fprintf(stderr, "mylogin: section %q not found in %s\n", loginPath, cleanPath)
+		printFmt(stderr, "mylogin: section %q not found in %s\n", loginPath, cleanPath)
 		return exitNotFound
 	}
 
 	if err := sections.WriteFile(cleanPath); err != nil {
-		fmt.Fprintf(stderr, "mylogin: failed to write %s: %v\n", cleanPath, err)
+		printFmt(stderr, "mylogin: failed to write %s: %v\n", cleanPath, err)
 		return exitFileError
 	}
 
@@ -413,12 +413,12 @@ func runList(args []string, stdout, stderr io.Writer) int {
 	cleanPath := filepath.Clean(filename)
 	sections, err := mylogin.ReadSections(cleanPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "mylogin: failed to read %s: %v\n", cleanPath, err)
+		printFmt(stderr, "mylogin: failed to read %s: %v\n", cleanPath, err)
 		return exitFileError
 	}
 
 	for _, name := range sections.Names() {
-		fmt.Fprintln(stdout, name)
+		printLine(stdout, name)
 	}
 	return exitSuccess
 }
@@ -475,7 +475,7 @@ func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	}
 
 	if showVersion {
-		fmt.Fprintf(stdout, "mylogin version %s\n", version)
+		printFmt(stdout, "mylogin version %s\n", version)
 		return exitSuccess
 	}
 
@@ -488,7 +488,7 @@ func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 		if selectedFormat != nil {
 			h1, _ := ft.Help()
 			h2, _ := selectedFormat.Help()
-			fmt.Fprintf(stderr, "mylogin: options -%s and -%s are mutually exclusive.\n", h1, h2)
+			printFmt(stderr, "mylogin: options -%s and -%s are mutually exclusive.\n", h1, h2)
 			return exitUsage
 		}
 		selectedFormat = ft
@@ -503,7 +503,7 @@ func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 					return handleFileError("mylogin", err, stderr)
 				}
 				if login.IsEmpty() {
-					fmt.Fprintf(stderr, "mylogin: section %q does not exist\n", name)
+					printFmt(stderr, "mylogin: section %q does not exist\n", name)
 					return exitNotFound
 				}
 				targets = append(targets, &mylogin.Section{Name: name, Login: *login})
@@ -520,7 +520,7 @@ func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 
 		for _, sec := range targets {
 			if err := selectedFormat.Print(stdout, sec); err != nil {
-				fmt.Fprintf(stderr, "mylogin: print error: %v\n", err)
+				printFmt(stderr, "mylogin: print error: %v\n", err)
 				return exitGeneral
 			}
 		}
@@ -530,11 +530,11 @@ func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 		if err != nil {
 			return handleFileError("mylogin", err, stderr)
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 
 		f, err := mylogin.Decode(bufio.NewReader(file))
 		if err != nil {
-			fmt.Fprintf(stderr, "mylogin: decode error: %v\n", err)
+			printFmt(stderr, "mylogin: decode error: %v\n", err)
 			return exitFormatError
 		}
 		rd := f.PlainText()
@@ -544,12 +544,20 @@ func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 		}
 
 		if _, err := io.Copy(stdout, rd); err != nil {
-			fmt.Fprintf(stderr, "mylogin: output error: %v\n", err)
+			printFmt(stderr, "mylogin: output error: %v\n", err)
 			return exitGeneral
 		}
 	}
 
 	return exitSuccess
+}
+
+func printLine(w io.Writer, a ...any) {
+	_, _ = fmt.Fprintln(w, a...)
+}
+
+func printFmt(w io.Writer, format string, a ...any) {
+	_, _ = fmt.Fprintf(w, format, a...)
 }
 
 func main() {
