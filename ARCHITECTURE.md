@@ -13,13 +13,13 @@ The `mylogin` library provides serialization, deserialization, manipulation, and
 ```mermaid
 graph TD
     subgraph StorageLayer["Storage Layer (Filesystem)"]
-        F1["~/.mylogin.cnf (AES-128-ECB Encrypted)"]
+        F1["~/.mylogin.cnf (AES-128-CBC with Zero IV)"]
     end
 
     subgraph CoreCrypto["Cryptographic Transformation Layer"]
         C1["mylogin.NewFile / ReadLogin / ReadSections"]
         C2["Key Derivation & Validation (20-byte Key)"]
-        C3["AES-128-ECB Block Cipher Engine"]
+        C3["AES-128-CBC Cipher Engine (Zero IV)"]
         C4["PKCS#7 Padding Handler"]
     end
 
@@ -74,9 +74,9 @@ graph TD
 
 2. **Full Compatibility with MySQL `mysql_config_editor`**:
    - The library strictly adheres to the format established by MySQL's C++ `mysql_config_editor` utility:
-     - 4-byte little-endian header length prefix.
+     - 4-byte null header prefix (`0x00, 0x00, 0x00, 0x00`).
      - 20-byte key header where the 3 most significant bits of each byte are zeroed (`key[i] &= 0x1F`).
-     - AES-128-ECB cipher algorithm.
+     - AES-128-CBC cipher mode utilizing an all-zero Initialization Vector (`zeroIV [16]byte`), mathematically behaving like ECB per 16-byte block while adhering to MySQL's `cipher.NewCBCDecrypter` / `NewCBCEncrypter` conventions.
      - 16-byte aligned PKCS#7 / zero padding.
 
 3. **In-Memory Credential Scrubbing**:
@@ -96,19 +96,19 @@ graph TD
 
 | Edge Case | Root Cause / Context | Handling Strategy |
 | :--- | :--- | :--- |
-| **Corrupted / Truncated Key Header** | File size less than 24 bytes (4-byte length + 20-byte key). | Explicit length check in [`Read`](./mylogin.go#L340); returns `io.ErrUnexpectedEOF` without allocating decryption buffers. |
-| **Non-Multiple-of-16 Payload Length** | Bitrot or truncated ciphertext segment. | Handled in [`Decode`](./mylogin.go#L294); returns an error indicating invalid AES block size alignment. |
-| **Corrupt PKCS#7 Padding Byte** | Ciphertext tampered or invalid encryption key. | Checked during block depadding; padded length is validated to not exceed total block length or underflow to negative values. |
-| **Blank Lines and Dangling Newlines** | Plaintext INI containing empty lines or `\r\n`. | [`parseLine`](./login.go#L299) safely trims whitespace and validates length before indexing into `line[0]`. Trailing `\r` is stripped for cross-platform consistency. |
-| **Unquoted vs. Quoted Values** | MySQL allows `host = localhost` and `host = "localhost"`. | [`parseLine`](./login.go#L299) unquotes double quotes (`"..."`) when present, while retaining raw values when unquoted. |
-| **Invalid Port Numbers** | Port specified as non-numeric string. | [`parseLine`](./login.go#L299) runs `strconv.ParseUint(v, 10, 16)` and fails if out of bounds (`0-65535`). |
-| **Windows Permissions vs. POSIX** | Windows filesystem ACLs lack standard POSIX `0600` bitmasks. | Platform-specific file checking in [`defaultfile_windows.go`](./defaultfile_windows.go) bypasses POSIX permission checks while [`mylogin.go`](./mylogin.go#L126) enforces `0600` on Unix platforms. |
-| **Concurrent File Modification** | External process (`mysql_config_editor`) writes while reading. | [`WriteFile`](./mylogin.go#L471) writes to a temporary file in the same directory (`.tmp-*`) and executes an atomic `os.Rename`, preventing partial file corruptions. |
+| **Corrupted / Truncated Key Header** | File size less than 24 bytes (4 null bytes + 20-byte key). | Explicit length check in [`Read`](./mylogin.go#L405); returns `io.ErrUnexpectedEOF` without allocating decryption buffers. |
+| **Non-Multiple-of-16 Payload Length** | Bitrot or truncated ciphertext segment. | Handled in [`Decode`](./mylogin.go#L357); returns `ErrInvalidBlockSize` indicating invalid AES block alignment. |
+| **Corrupt PKCS#7 Padding Byte** | Ciphertext tampered or invalid encryption key. | Checked during block depadding; padded length is validated to not exceed total block length or underflow to negative values. Returns `ErrInvalidPadding`. |
+| **Blank Lines and Dangling Newlines** | Plaintext INI containing empty lines or `\r\n`. | [`parseLine`](./login.go#L383) safely trims whitespace and validates length before indexing into `line[0]`. Trailing `\r` is stripped for cross-platform consistency. |
+| **Unquoted vs. Quoted Values** | MySQL allows `host = localhost` and `host = "localhost"`. | [`parseLine`](./login.go#L383) unquotes double quotes (`"..."`) when present, while retaining raw values when unquoted. |
+| **Invalid Port Numbers** | Port specified as non-numeric string. | [`parseLine`](./login.go#L383) runs `strconv.ParseUint(v, 10, 16)` and fails if out of bounds (`0-65535`). |
+| **Windows Permissions vs. POSIX** | Windows filesystem ACLs lack standard POSIX `0600` bitmasks. | Platform-specific file checking in [`defaultfile_windows.go`](./defaultfile_windows.go) bypasses POSIX permission checks while [`mylogin.go`](./mylogin.go#L162) enforces `0600` on Unix platforms. |
+| **Concurrent File Modification** | External process (`mysql_config_editor`) writes while reading. | [`WriteFile`](./mylogin.go#L557) writes to a temporary file in the same directory (`.mylogin-*.tmp`) and executes an atomic `os.Rename`, preventing partial file corruptions. |
 
 ### 1.5 Performance and Computational Efficiency
 
-- **Allocation Containment**: In [`Encode`](./mylogin.go#L404) and [`Decode`](./mylogin.go#L294), block processing occurs in-place where feasible. Buffer slices are pre-allocated with known capacity calculated from plaintext length and 16-byte block alignment boundaries.
-- **Stream Filtering**: [`FilterSection`](./filter.go#L11) reads the decrypted INI stream lazily line-by-line, demultiplexing only the targeted section rather than loading the entire file into secondary parse trees when single-section reading is requested via [`ReadLogin`](./mylogin.go#L156).
+- **Allocation Containment**: In [`Encode`](./mylogin.go#L478) and [`Decode`](./mylogin.go#L357), block processing occurs in-place where feasible. Buffer slices are pre-allocated with known capacity calculated from plaintext length and 16-byte block alignment boundaries.
+- **Stream Filtering**: [`FilterSection`](./filter.go#L27) reads the decrypted INI stream lazily line-by-line, demultiplexing only the targeted section rather than loading the entire file into secondary parse trees when single-section reading is requested via [`ReadLogin`](./mylogin.go#L197).
 - **Driver Connector Re-use**: `Login.Open()` configures the standard library connection pool (`*sql.DB`), allowing persistent socket reuse across thousands of transactions without re-reading or re-decrypting `.mylogin.cnf`.
 
 ---
@@ -155,9 +155,9 @@ sequenceDiagram
     FS-->>API: *os.File Handle
     API->>Engine: Read(fileReader)
     activate Engine
-    Engine->>Engine: Parse 4-byte header length
+    Engine->>Engine: Parse 4-byte null header prefix
     Engine->>Engine: Extract 20-byte Key
-    Engine->>Engine: Initialize AES-128-ECB Block Mode
+    Engine->>Engine: Initialize AES-128-CBC Cipher (Zero IV)
     Engine->>Engine: Decrypt blocks & strip PKCS#7 padding
     Engine-->>API: Decrypted Plaintext INI Stream
     deactivate Engine
@@ -228,7 +228,6 @@ graph TD
 
     subgraph DirectDeps["Direct Runtime Dependencies"]
         D1["github.com/go-sql-driver/mysql (v1.10.1)"]
-        D2["golang.org/x/term (Terminal Password Echo Suppression)"]
     end
 
     subgraph IndirectDeps["Indirect Dependencies"]
@@ -240,7 +239,7 @@ graph TD
         SL2["database/sql & database/sql/driver"]
         SL3["os, io, bufio, path/filepath"]
         SL4["log/slog (Structured Logging)"]
-        SL5["encoding/binary & strconv"]
+        SL5["encoding/binary, strconv, text/template"]
     end
 
     subgraph BuildTools["Static Analysis & Build Toolchain"]
@@ -255,7 +254,6 @@ graph TD
     RootPkg --> SL4
     RootPkg --> SL5
     RootPkg --> D1
-    CmdMain --> D2
     CmdMain --> RootPkg
     CmdDSN --> RootPkg
     CmdKey --> RootPkg
@@ -270,9 +268,9 @@ graph TD
 | **Go Toolchain** | `>= 1.24.0` | Runtime environment, compiler, and standard library. |
 | **`github.com/go-sql-driver/mysql`** | `v1.10.1` | Driver implementation for `mysql.Config` and `mysql.NewConnector`. |
 | **`filippo.io/edwards25519`** | `v1.2.0` | Cryptographic dependency transitively required by `go-sql-driver/mysql`. |
-| **`golang.org/x/term`** | Standard Subrepo | Terminal raw mode handling for masked password prompt entry in CLI. |
 | **`crypto/aes`** | Standard Library | Primitive AES block cipher execution. |
 | **`log/slog`** | Standard Library | Structured logging contract (`slog.LogValuer`). |
+| **`text/template`** | Standard Library | User-customizable template output engine for CLI commands. |
 
 ---
 
@@ -282,8 +280,8 @@ graph TD
 
 > [!WARNING]
 > **Cryptographic Scope Limitation**:
-> MySQL's `.mylogin.cnf` format employs **AES-128 in Electronic Codebook (ECB) mode** with a key derived from 20 bytes stored directly in the file header.
-> - **ECB Mode**: ECB does not use an Initialization Vector (IV). Identical plaintext blocks produce identical ciphertext blocks, making it theoretically susceptible to pattern leakage in large files.
+> MySQL's `.mylogin.cnf` format employs **AES-128 in Cipher Block Chaining (CBC) mode with an all-zero Initialization Vector** (effectively behaving like ECB per 16-byte chunk) with a key derived from 20 bytes stored directly in the file header.
+> - **Zero IV CBC Mode**: Using a static null IV eliminates uniqueness across ciphertext blocks when identical plaintext lines occur, making it theoretically susceptible to frequency analysis in large configurations.
 > - **Header Key Storage**: The encryption key is stored within the file itself. Consequently, `.mylogin.cnf` is an **obfuscation mechanism**, not an authenticated encryption envelope (such as AES-GCM) or a hardware-secured vault (such as KMS or TPM).
 > - **Security Boundary**: The operational security of `.mylogin.cnf` depends entirely on operating system file permissions.
 
@@ -338,8 +336,8 @@ graph TD
 ### 5.3 Defense-in-Depth and Mitigation Layers
 
 1. **Host-Level Access Control (RBAC & Discretionary Access Control)**:
-   - On POSIX platforms, [`CheckPermissions`](./mylogin.go#L126) validates that `.mylogin.cnf` has file permissions no more permissive than `0600` (`-rw-------`). If group or other read/write bits are set, execution is aborted with an error to prevent multi-user access on shared infrastructure.
-   - When generating or updating configuration files via [`WriteFile`](./mylogin.go#L471), the file descriptor is created strictly with `0600` flags.
+   - On POSIX platforms, [`CheckPermissions`](./mylogin.go#L162) validates that `.mylogin.cnf` has file permissions no more permissive than `0600` (`-rw-------`). If group or other read/write bits are set, execution is aborted with an error to prevent multi-user access on shared infrastructure.
+   - When generating or updating configuration files via [`WriteFile`](./mylogin.go#L557), the file descriptor is created strictly with `0600` flags.
 
 2. **Accidental Credential Exposure Mitigation**:
    - **`Login.String()`**: The default string representation of `Login` prints a redacted connection string via `RedactedDSN()`. Even if an engineer writes `fmt.Println(login)` or prints debug objects, plaintext passwords are never emitted.
@@ -352,7 +350,7 @@ graph TD
      Any structured log call (`slog.Info("Connecting", "login", login)`) formats sensitive fields safely.
 
 3. **Memory Exposure Containment**:
-   - [`Key.Zero()`](./mylogin.go#L63) and [`Login.Zero()`](./login.go#L111) provide zeroing mechanisms. Applications processing credentials in long-lived services can explicitly invoke `Zero()` to scrub key bytes and password strings from heap memory immediately after establishing database connections.
+   - [`Key.Zero()`](./mylogin.go#L96) and [`Login.Zero()`](./login.go#L184) provide zeroing mechanisms. Applications processing credentials in long-lived services can explicitly invoke `Zero()` to scrub key bytes and password strings from heap memory immediately after establishing database connections.
 
 4. **Transport-Layer Security (TLS / SSL)**:
    - Client options parsed from `.mylogin.cnf` (`ssl-mode`) are mapped directly into `mysql.Config.TLSConfig`:

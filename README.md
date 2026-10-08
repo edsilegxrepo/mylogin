@@ -10,8 +10,8 @@ The `github.com/edsilegxrepo/mylogin` module is an enterprise-grade Go library a
 
 To maintain a single source of truth without content duplication, detailed architectural models and test specifications reside in dedicated documentation files:
 
-- [ARCHITECTURE.md](./ARCHITECTURE.md): Authoritative specification for system architecture, AES-128-ECB mechanics, AST parsing, concurrency guarantees, security threat models, and package dependencies.
-- [TESTING.md](./TESTING.md): Authoritative specification for test suite architecture, logic flows, master test inventory, live MySQL daemon provisioning, and statement coverage metrics (94.2%).
+- [ARCHITECTURE.md](./ARCHITECTURE.md): Authoritative specification for system architecture, AES-128-CBC mechanics, AST parsing, concurrency guarantees, security threat models, and package dependencies.
+- [TESTING.md](./TESTING.md): Authoritative specification for test suite architecture, logic flows, master test inventory, live MySQL daemon provisioning, and statement coverage metrics (94.3%).
 
 ---
 
@@ -22,8 +22,8 @@ MySQL client utilities read obfuscated authentication credentials from `~/.mylog
 ### Primary Objectives
 
 1. **Native Pure-Go Implementation**: Execute reading, writing, and administrative operations on `.mylogin.cnf` without requiring MySQL client binaries (`mysql`, `mysql_config_editor`) or CGO dynamic libraries installed in the runtime container.
-2. **Plaintext DSN Elimination**: Provide direct `driver.Connector` and `sql.OpenDB` handles via [`Login.Open()`](./login.go#L277) and [`Login.Connector()`](./login.go#L267), preventing passwords from being exposed in Data Source Name (DSN) connection strings and downstream driver error logs.
-3. **Automated Credential Redaction**: Mask credentials by default in [`Login.String()`](./login.go#L237) and implement [`slog.LogValuer`](./login.go#L242) so that passing credential instances to structured logging systems (`log/slog`) never leaks passwords to log aggregators.
+2. **Plaintext DSN Elimination**: Provide direct `driver.Connector` and `sql.OpenDB` handles via [`Login.Open()`](./login.go#L358) and [`Login.Connector()`](./login.go#L348), preventing passwords from being exposed in Data Source Name (DSN) connection strings and downstream driver error logs.
+3. **Automated Credential Redaction**: Mask credentials by default in [`Login.String()`](./login.go#L317) and implement [`slog.LogValuer`](./login.go#L323) so that passing credential instances to structured logging systems (`log/slog`) never leaks passwords to log aggregators.
 4. **Resilience and Panic Immunity**: Ensure robust AST parsing that rejects malformed tokens, prevents nil pointer dereferences, handles arbitrary newline formats, and uses atomic temporary file replacement for zero-corruption file writes.
 
 *For architectural design choices, component block diagrams, and edge-case handling strategies, refer to [ARCHITECTURE.md § 1. Architecture, Design Choices, Assumptions, Edge Cases, and Efficiency](./ARCHITECTURE.md#1-architecture-design-choices-assumptions-edge-cases-and-efficiency).*
@@ -42,21 +42,21 @@ The module parses connection parameters from `.mylogin.cnf` and maps security co
 
 - **Credential Redaction**: `Login.String()` and `Login.RedactedDSN()` mask passwords (`app_user:******@tcp(host:port)/`).
 - **Structured Telemetry Protection**: Passing `*Login` to `log/slog` formats sensitive fields with `******`.
-- **In-Memory Sanitization**: Explicit memory scrubbing via [`Key.Zero()`](./mylogin.go#L63) and [`Login.Zero()`](./login.go#L111) clears key bytes and sensitive pointers from process heap memory.
+- **In-Memory Sanitization**: Explicit memory scrubbing via [`Key.Zero()`](./mylogin.go#L96) and [`Login.Zero()`](./login.go#L184) clears key bytes and sensitive pointers from process heap memory.
 
 ### 2.3 Access Control and Unprivileged Execution Context
 
-- **Host Discretionary Access Control (DAC)**: Security relies on OS file isolation. On POSIX filesystems, [`CheckPermissions`](./mylogin.go#L126) rejects files with permissions more permissive than `0600` (`-rw-------`).
+- **Host Discretionary Access Control (DAC)**: Security relies on OS file isolation. On POSIX filesystems, [`CheckPermissions`](./mylogin.go#L162) rejects files with permissions more permissive than `0600` (`-rw-------`).
 - **Unprivileged Runtime**: Operates strictly within user-space context (`~/.mylogin.cnf`). No root privileges or elevated capabilities (`CAP_*`) are required, supporting non-root container deployment standards.
 - **Dependency Audit**: Verified clean with 0 known vulnerabilities (`govulncheck`) and 0 static security issues (`gosec`).
 
-*For the complete threat model, cryptographic limitations of AES-128-ECB, security architecture diagrams, and runtime module inventories, refer to [ARCHITECTURE.md § 5. Security Architecture](./ARCHITECTURE.md#5-security-architecture) and [ARCHITECTURE.md § 4. Dependencies and Runtime Environment](./ARCHITECTURE.md#4-dependencies-and-runtime-environment).*
+*For the complete threat model, cryptographic limitations of AES-128-CBC with zero IV, security architecture diagrams, and runtime module inventories, refer to [ARCHITECTURE.md § 5. Security Architecture](./ARCHITECTURE.md#5-security-architecture) and [ARCHITECTURE.md § 4. Dependencies and Runtime Environment](./ARCHITECTURE.md#4-dependencies-and-runtime-environment).*
 
 ---
 
 ## 3. Code Quality and Verification Summary
 
-- **Total Module Statement Coverage**: **94.2%** across all packages, verified with Go's data race detector (`-race`).
+- **Total Module Statement Coverage**: **94.3%** across all packages, verified with Go's data race detector (`-race`).
 - **Compiler Hardening**: Built with `-trimpath` and `-buildmode=pie` Position Independent Executables with stripped debug symbols (`-ldflags "-s -w"`).
 - **Code Standards**: 100% compliant with canonical `gofumpt` formatting, `go vet`, and `gosec` AST analysis.
 
@@ -71,13 +71,14 @@ The module parses connection parameters from `.mylogin.cnf` and maps security co
 The `mylogin` binary inspects, formats, and manages `.mylogin.cnf` files.
 
 ```
-Usage: mylogin [flags] [subcommand] [subcommand-flags]
+Usage: mylogin [flags] [<section> ...]
+       mylogin <subcommand> [subcommand-flags]
 ```
 
 | Flag | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `-file` | `string` | `~/.mylogin.cnf` | Absolute or relative path to the `.mylogin.cnf` option file. |
-| `-json` | `bool` | `false` | Export configuration sections in JSON format. Section names are mapped to parent objects. |
+| `-json` | `bool` | `false` | Export configuration sections as pretty-printed JSON objects. |
 | `-remove` | `bool` | `false` | Emit `mysql_config_editor remove` shell commands to recreate deletions. |
 | `-replay` | `bool` | `false` | Emit `mysql_config_editor set` shell commands to recreate configuration entries. |
 | `-template` | `string` | `""` | Go `text/template` format string. Available custom template functions include `json`. |
@@ -92,45 +93,38 @@ Creates or updates a login path section.
 
 | Flag | Shorthand | Type | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `--login-path` | `-p` *(via name)* | `string` | `client` | Name of the configuration section to create or update. |
-| `--host` | `-h` | `string` | `""` | Database server hostname or IP address. |
-| `--user` | `-u` | `string` | `""` | Database username. |
-| `--password` | `-p` | `bool`/`string` | `false` | When passed without value, prompts interactively with terminal echo disabled. Reads from stdin pipe if redirected. Accepts plaintext password when assigned directly (`--password=secret`). |
-| `--port` | `-P` | `string` | `""` | Database TCP listening port (e.g. `3306`). |
-| `--socket` | `-S` | `string` | `""` | Path to MySQL UNIX domain socket. |
-| `--file` | *(none)* | `string` | `~/.mylogin.cnf` | Path to target option file. |
-| `--warn` | `-w` | `bool` | `true` | Retained for compatibility with `mysql_config_editor`. |
+| `-login-path` | `-G` | `string` | `client` | Name of the configuration section to create or update. |
+| `-host` | `-h` | `string` | `""` | Database server hostname or IP address. |
+| `-user` | `-u` | `string` | `""` | Database username. |
+| `-password` | `-p` | `bool` | `false` | Prompts interactively for password on stderr (reads from stdin pipe if redirected). |
+| `-pass` | *(none)* | `string` | `""` | Direct password value for non-interactive automation (e.g. CI/CD or secrets manager). |
+| `-port` | `-P` | `string` | `""` | Database TCP listening port (e.g. `3306`). |
+| `-socket` | `-S` | `string` | `""` | Path to MySQL UNIX domain socket. |
+| `-file` | *(none)* | `string` | `~/.mylogin.cnf` | Path to target option file. |
 
-##### `mylogin remove`
-Removes an entire section or selective options within a section.
+##### `mylogin remove` (alias: `rm`)
+Removes an entire login path section from `.mylogin.cnf`.
 
-| Flag | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `--login-path` | `string` | `client` | Target section name. |
-| `--user` | `bool` | `false` | Delete only the user key from the specified section. |
-| `--host` | `bool` | `false` | Delete only the host key from the specified section. |
-| `--password` | `bool` | `false` | Delete only the password key from the specified section. |
-| `--port` | `bool` | `false` | Delete only the port key from the specified section. |
-| `--socket` | `bool` | `false` | Delete only the socket key from the specified section. |
-| `--file` | `string` | `~/.mylogin.cnf` | Path to target option file. |
-| `--warn` | `bool` | `true` | Retained for compatibility. |
+| Flag | Shorthand | Type | Default | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `-login-path` | `-G` | `string` | `""` | Target section name to remove (can also be passed as positional argument). |
+| `-file` | *(none)* | `string` | `~/.mylogin.cnf` | Path to target option file. |
 
-##### `mylogin list`
-Lists configured sections and options.
+##### `mylogin list` (alias: `ls`)
+Lists all configured login path section names, one per line.
 
 | Flag | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `--login-path` | `string` | `""` | Optional filter to display only the specified section. When omitted, lists all sections. |
-| `--file` | `string` | `~/.mylogin.cnf` | Path to target option file. |
+| `-file` | `string` | `~/.mylogin.cnf` | Path to target option file. |
 
 ---
 
 ### 4.2 `mylogin-dsn`
 
-Generates Data Source Name (DSN) connection prefixes suitable for `go-sql-driver/mysql` or MySQL CLI connection arguments.
+Generates Data Source Name (DSN) connection strings suitable for `go-sql-driver/mysql` or MySQL CLI connection arguments.
 
 ```
-Usage: mylogin-dsn [flags] [section-name]
+Usage: mylogin-dsn [-file <path>] [-database <dbname>] [<section> ...]
 ```
 
 | Flag | Type | Default | Description |
@@ -144,17 +138,17 @@ Usage: mylogin-dsn [flags] [section-name]
 
 ### 4.3 `mylogin-key`
 
-Inspects and extracts the 20-byte encryption key stored in the header of `.mylogin.cnf`.
+Inspects, compacts, and displays the 20-byte encryption key embedded in the header of `.mylogin.cnf`.
 
 ```
-Usage: mylogin-key [flags]
+Usage: mylogin-key [-version] [-V] [<file> ...]
 ```
 
 | Flag | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `-file` | `string` | `~/.mylogin.cnf` | Path to option file. |
 | `-version` | `bool` | `false` | Display version and exit. |
 | `-V` | `bool` | `false` | Short version display. |
+| `[<file> ...]` | `string` | `~/.mylogin.cnf` | Optional one or more files to inspect (defaults to standard login file). |
 
 ---
 
@@ -248,18 +242,29 @@ func main() {
 Provision credentials non-interactively in automated deployment scripts using either arguments or standard input pipes:
 
 ```bash
-# Set credentials non-interactively using arguments
-mylogin set --login-path=service_db --host=db.production.internal --port=3306 --user=svc_writer --password=VaultProvidedSecret456
+# Set credentials non-interactively using the -pass flag (e.g. from vault or secrets manager)
+mylogin set -login-path=service_db -host=db.production.internal -port=3306 -user=svc_writer -pass=VaultProvidedSecret456
 
-# Or pass password via stdin pipe to prevent exposure in process table (ps aux)
-echo "VaultProvidedSecret456" | mylogin set --login-path=service_db --host=db.production.internal --port=3306 --user=svc_writer --password
+# Or pass password via stdin pipe with -password (-p) to prevent exposure in process tables (ps aux)
+echo "VaultProvidedSecret456" | mylogin set -login-path=service_db -host=db.production.internal -port=3306 -user=svc_writer -password
 ```
 
 #### Scenario 2: Inspecting and Exporting Configurations
 
 ```bash
-# List all configured login paths
+# List all configured login path names
 mylogin list
+```
+
+**Output Sample:**
+```text
+client
+service_db
+```
+
+```bash
+# Dump full decrypted INI configuration with passwords masked
+mylogin
 ```
 
 **Output Sample:**
@@ -268,13 +273,13 @@ mylogin list
 host = "db.production.internal"
 port = 3306
 user = "svc_reader"
-password = ********
+password = "******"
 
 [service_db]
 host = "db.production.internal"
 port = 3306
 user = "svc_writer"
-password = ********
+password = "******"
 ```
 
 ```bash
