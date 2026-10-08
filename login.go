@@ -91,6 +91,50 @@ func (l *Login) SetExtra(key, value string) *Login {
 	return l
 }
 
+// Set sets an option by key name, updating standard typed fields or placing non-standard options in Extra.
+func (l *Login) Set(key, value string) *Login {
+	switch key {
+	case "user":
+		return l.SetUser(value)
+	case "password":
+		return l.SetPassword(value)
+	case "host":
+		return l.SetHost(value)
+	case "port":
+		return l.SetPort(value)
+	case "socket":
+		return l.SetSocket(value)
+	default:
+		return l.SetExtra(key, value)
+	}
+}
+
+// Map returns a copy of all configured options as a key-value map.
+func (l *Login) Map() map[string]string {
+	m := make(map[string]string)
+	if l == nil {
+		return m
+	}
+	for _, opt := range []struct {
+		k string
+		v *string
+	}{
+		{"user", l.User},
+		{"password", l.Password},
+		{"host", l.Host},
+		{"port", l.Port},
+		{"socket", l.Socket},
+	} {
+		if opt.v != nil {
+			m[opt.k] = *opt.v
+		}
+	}
+	for k, v := range l.Extra {
+		m[k] = v
+	}
+	return m
+}
+
 // IsEmpty is true if l is nil or none of the options are set.
 func (l *Login) IsEmpty() bool {
 	return l == nil ||
@@ -312,23 +356,7 @@ func (l *Login) parseLine(line string) error {
 		v = unescape(strings.ReplaceAll(v, `\\`, `\`))
 	}
 
-	switch key {
-	case "user":
-		l.User = &v
-	case "password":
-		l.Password = &v
-	case "host":
-		l.Host = &v
-	case "port":
-		l.Port = &v
-	case "socket":
-		l.Socket = &v
-	default:
-		if l.Extra == nil {
-			l.Extra = make(map[string]string)
-		}
-		l.Extra[key] = v
-	}
+	l.Set(key, v)
 	return nil
 }
 

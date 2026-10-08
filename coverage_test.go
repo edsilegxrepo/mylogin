@@ -427,3 +427,28 @@ func TestTopLevelConvenienceAndSectionsWriteFile(t *testing.T) {
 		t.Errorf("expected app_user with merged host from client, got %+v", appLogin)
 	}
 }
+
+func TestLoginSetAndMap(t *testing.T) {
+	// 1. Nil receiver test
+	var nilLogin *mylogin.Login
+	if m := nilLogin.Map(); len(m) != 0 {
+		t.Errorf("expected empty map for nil login, got %v", m)
+	}
+
+	// 2. Population via Set
+	var l mylogin.Login
+	l.Set("user", "alice")
+	l.Set("password", "secret123")
+	l.Set("host", "10.0.0.1")
+	l.Set("port", "3307")
+	l.Set("socket", "/var/run/mysqld.sock")
+	l.Set("database", "shop")
+	l.Set("ssl-mode", "REQUIRED")
+
+	m := l.Map()
+	if m["user"] != "alice" || m["password"] != "secret123" || m["host"] != "10.0.0.1" ||
+		m["port"] != "3307" || m["socket"] != "/var/run/mysqld.sock" ||
+		m["database"] != "shop" || m["ssl-mode"] != "REQUIRED" {
+		t.Errorf("unexpected Map() output: %v", m)
+	}
+}

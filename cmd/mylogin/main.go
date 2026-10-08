@@ -107,24 +107,19 @@ func (formatRemove) Print(w io.Writer, section *mylogin.Section) error {
 	return err
 }
 
-func loginAsMap(login *mylogin.Login) map[string]interface{} {
-	m := make(map[string]interface{})
-	for _, x := range []struct {
-		key   string
-		value *string
-	}{
-		{"user", login.User},
-		{"password", login.Password},
-		{"host", login.Host},
-		{"socket", login.Socket},
-		{"port", login.Port},
-	} {
-		if x.value != nil {
-			m[x.key] = *x.value
-		}
+func handleFileError(cmd string, err error, stderr io.Writer) int {
+	if os.IsNotExist(err) || os.IsPermission(err) {
+		fmt.Fprintf(stderr, "%s: file error: %v\n", cmd, err)
+		return exitFileError
 	}
-	// Include any arbitrary extra client options
-	for k, v := range login.Extra {
+	fmt.Fprintf(stderr, "%s: decryption/parse error: %v\n", cmd, err)
+	return exitFormatError
+}
+
+func loginAsMap(login *mylogin.Login) map[string]interface{} {
+	opts := login.Map()
+	m := make(map[string]interface{}, len(opts))
+	for k, v := range opts {
 		m[k] = v
 	}
 	return m
@@ -290,17 +285,16 @@ func runSet(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if login == nil {
 		login = new(mylogin.Login)
 	}
-	if user != "" {
-		login.SetUser(user)
+	opts := map[string]string{
+		"user":   user,
+		"host":   host,
+		"port":   port,
+		"socket": socket,
 	}
-	if host != "" {
-		login.SetHost(host)
-	}
-	if port != "" {
-		login.SetPort(port)
-	}
-	if socket != "" {
-		login.SetSocket(socket)
+	for k, v := range opts {
+		if v != "" {
+			login.Set(k, v)
+		}
 	}
 	if password != "" || promptPassword {
 		login.SetPassword(password)
@@ -446,55 +440,40 @@ func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	}
 
 	if selectedFormat != nil {
+		var targets []*mylogin.Section
 		if flags.NArg() != 0 {
 			for _, name := range flags.Args() {
 				login, err := mylogin.ReadLogin(filename, []string{name})
 				if err != nil {
-					if os.IsNotExist(err) || os.IsPermission(err) {
-						fmt.Fprintf(stderr, "mylogin: file error: %v\n", err)
-						return exitFileError
-					}
-					fmt.Fprintf(stderr, "mylogin: decryption/parse error: %v\n", err)
-					return exitFormatError
+					return handleFileError("mylogin", err, stderr)
 				}
 				if login.IsEmpty() {
 					fmt.Fprintf(stderr, "mylogin: section %q does not exist\n", name)
 					return exitNotFound
 				}
-
-				if err := selectedFormat.Print(stdout, &mylogin.Section{Name: name, Login: *login}); err != nil {
-					fmt.Fprintf(stderr, "mylogin: print error: %v\n", err)
-					return exitGeneral
-				}
+				targets = append(targets, &mylogin.Section{Name: name, Login: *login})
 			}
 		} else {
 			sections, err := mylogin.ReadSections(filename)
 			if err != nil {
-				if os.IsNotExist(err) || os.IsPermission(err) {
-					fmt.Fprintf(stderr, "mylogin: file error: %v\n", err)
-					return exitFileError
-				}
-				fmt.Fprintf(stderr, "mylogin: decryption/parse error: %v\n", err)
-				return exitFormatError
+				return handleFileError("mylogin", err, stderr)
 			}
-
 			for i := range sections {
-				if err := selectedFormat.Print(stdout, &sections[i]); err != nil {
-					fmt.Fprintf(stderr, "mylogin: print error: %v\n", err)
-					return exitGeneral
-				}
+				targets = append(targets, &sections[i])
+			}
+		}
+
+		for _, sec := range targets {
+			if err := selectedFormat.Print(stdout, sec); err != nil {
+				fmt.Fprintf(stderr, "mylogin: print error: %v\n", err)
+				return exitGeneral
 			}
 		}
 	} else {
 		cleanPath := filepath.Clean(filename)
 		file, err := os.Open(cleanPath) // #nosec G304 -- CLI utility intentionally reads user-specified path
 		if err != nil {
-			if os.IsNotExist(err) || os.IsPermission(err) {
-				fmt.Fprintf(stderr, "mylogin: file error: %v\n", err)
-				return exitFileError
-			}
-			fmt.Fprintf(stderr, "mylogin: error: %v\n", err)
-			return exitFileError
+			return handleFileError("mylogin", err, stderr)
 		}
 		defer file.Close()
 

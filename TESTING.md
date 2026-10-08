@@ -176,6 +176,7 @@ Below is the complete inventory of all test functions, their logical grouping, t
 | **Security & Privacy** | [`TestDSNInjectionDefense`](./hardened_test.go#L363) | Validates escaping and quoting in DSN parameters to prevent query injection. | Disallows injection vectors in host, socket, and database fields. |
 | **Security & Privacy** | [`TestLoginRedactionAndSlog`](./coverage_test.go#L265) | Verifies credential masking in `String()`, `RedactedDSN()`, and `slog.LogValuer`. | Passwords never appear in output; always replaced with `"******"`. |
 | **Model & Options** | [`TestMergeDeepCopy`](./hardened_test.go#L106) | Validates that merging sections creates independent pointer copies. | Modifying the source `Login` after merge does not alter target `Login`. |
+| **Model & Options** | [`TestLoginSetAndMap`](./coverage_test.go#L431) | Validates dynamic option assignment with Set() and map projection via Map(). | Successfully sets and maps all options and handles nil receivers. |
 | **Model & Options** | [`TestConfigMethod`](./hardened_test.go#L138) | Validates generation of official `*mysql.Config` from `Login`. | Correctly translates user, password, address, and socket parameters. |
 | **Model & Options** | [`TestExtendedConfigOptionMapping`](./coverage_test.go#L348) | Tests mapping of `ssl-mode`, `connect-timeout`, and `max-allowed-packet`. | Correctly maps TLSConfig (`DISABLED`, `REQUIRED`, etc.) and timeout durations. |
 | **Model & Options** | [`TestNilSafety`](./hardened_test.go#L256) | Calls all public methods on `(*Login)(nil)`. | All methods return default values or empty configs without panicking. |
@@ -203,12 +204,12 @@ Below is the complete inventory of all test functions, their logical grouping, t
 ### 6.1 Statement Coverage by Package
 
 ```
-ok      github.com/edsilegxrepo/mylogin             coverage: 92.6% of statements
-ok      github.com/edsilegxrepo/mylogin/cmd/mylogin         coverage: 94.3% of statements
-ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-dsn     coverage: 92.5% of statements
+ok      github.com/edsilegxrepo/mylogin             coverage: 92.9% of statements
+ok      github.com/edsilegxrepo/mylogin/cmd/mylogin         coverage: 95.9% of statements
+ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-dsn     coverage: 92.7% of statements
 ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-key     coverage: 92.8% of statements
 ---------------------------------------------------------------------------------------
-TOTAL MODULE COVERAGE:                              93.4% of statements
+TOTAL MODULE COVERAGE:                              94.2% of statements
 THRESHOLD REQUIREMENT:                              >= 80.0% (PASSED)
 ```
 

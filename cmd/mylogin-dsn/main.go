@@ -19,6 +19,15 @@ const (
 
 var version = "dev"
 
+func handleFileError(cmd string, err error, stderr io.Writer) int {
+	if os.IsNotExist(err) || os.IsPermission(err) {
+		fmt.Fprintf(stderr, "%s: file error: %v\n", cmd, err)
+		return exitFileError
+	}
+	fmt.Fprintf(stderr, "%s: decryption/parse error: %v\n", cmd, err)
+	return exitFormatError
+}
+
 func run(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("mylogin-dsn", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -55,12 +64,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	login, err := mylogin.ReadLogin(filename, sections)
 	if err != nil {
-		if os.IsNotExist(err) || os.IsPermission(err) {
-			fmt.Fprintf(stderr, "mylogin-dsn: file error: %v\n", err)
-			return exitFileError
-		}
-		fmt.Fprintf(stderr, "mylogin-dsn: decryption/parse error: %v\n", err)
-		return exitFormatError
+		return handleFileError("mylogin-dsn", err, stderr)
 	}
 
 	if login.IsEmpty() {

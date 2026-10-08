@@ -11,7 +11,7 @@ The `github.com/edsilegxrepo/mylogin` module is an enterprise-grade Go library a
 To maintain a single source of truth without content duplication, detailed architectural models and test specifications reside in dedicated documentation files:
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md): Authoritative specification for system architecture, AES-128-ECB mechanics, AST parsing, concurrency guarantees, security threat models, and package dependencies.
-- [TESTING.md](./TESTING.md): Authoritative specification for test suite architecture, logic flows, master test inventory, live MySQL daemon provisioning, and statement coverage metrics (93.4%).
+- [TESTING.md](./TESTING.md): Authoritative specification for test suite architecture, logic flows, master test inventory, live MySQL daemon provisioning, and statement coverage metrics (94.2%).
 
 ---
 
@@ -56,7 +56,7 @@ The module parses connection parameters from `.mylogin.cnf` and maps security co
 
 ## 3. Code Quality and Verification Summary
 
-- **Total Module Statement Coverage**: **93.4%** across all packages, verified with Go's data race detector (`-race`).
+- **Total Module Statement Coverage**: **94.2%** across all packages, verified with Go's data race detector (`-race`).
 - **Compiler Hardening**: Built with `-trimpath` and `-buildmode=pie` Position Independent Executables with stripped debug symbols (`-ldflags "-s -w"`).
 - **Code Standards**: 100% compliant with canonical `gofumpt` formatting, `go vet`, and `gosec` AST analysis.
 
