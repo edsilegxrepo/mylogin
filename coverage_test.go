@@ -305,6 +305,67 @@ func TestCoreCoverageBoost(t *testing.T) {
 	if !defaultMerged.IsEmpty() {
 		t.Errorf("expected empty merged when default section 'client' is not present")
 	}
+
+	// 15. Test platformDefaultFile fallback when HOME is unset
+	t.Setenv("HOME", "")
+	_ = mylogin.DefaultFile()
+
+	// 16. Test Login.Open error path with invalid TLS configuration
+	var invalidTLSSec mylogin.Login
+	invalidTLSSec.SetExtra("ssl-mode", "unregistered_tls_profile_xyz")
+	if _, err := invalidTLSSec.Open(""); err == nil {
+		t.Errorf("expected Open to fail with unregistered TLS config")
+	}
+
+	// 17. Test nil Login LogValue
+	if val := nilLogin.LogValue(); len(val.Group()) != 0 {
+		t.Errorf("expected empty group value for nil Login.LogValue()")
+	}
+
+	// 18. Test decoder.Close with an underlying io.Closer
+	closable := &closableReader{Reader: bytes.NewReader(buf.Bytes())}
+	decWithCloser, err := mylogin.Decode(closable)
+	if err == nil {
+		if closer, ok := decWithCloser.(io.Closer); ok {
+			if err := closer.Close(); err != nil {
+				t.Errorf("expected clean Close: %v", err)
+			}
+			if !closable.closed {
+				t.Errorf("expected underlying closer to be called")
+			}
+		}
+	}
+
+	// 19. Test decoder.Read with nil buffer
+	decFile, decErr := mylogin.Decode(bytes.NewReader(buf.Bytes()))
+	if decErr == nil {
+		if rn, rerr := decFile.PlainText().Read(nil); rn != 0 || rerr != nil {
+			t.Errorf("expected (0, nil) on Read(nil), got (%d, %v)", rn, rerr)
+		}
+	}
+
+	// 20. Test filterSection.Read with nil buffer and scanner error
+	filt := mylogin.FilterSection(strings.NewReader("[client]\nuser = root\n"), "client")
+	if rn, rerr := filt.Read(nil); rn != 0 || rerr != nil {
+		t.Errorf("expected (0, nil) on filterSection.Read(nil)")
+	}
+	hugeTokenReader := mylogin.FilterSection(strings.NewReader("[client]\n"+strings.Repeat("x", 70000)+"\n"), "client")
+	var discardBuf [1024]byte
+	for {
+		if _, rerr := hugeTokenReader.Read(discardBuf[:]); rerr != nil {
+			break
+		}
+	}
+}
+
+type closableReader struct {
+	io.Reader
+	closed bool
+}
+
+func (c *closableReader) Close() error {
+	c.closed = true
+	return nil
 }
 
 type failingCoverageReader struct{}

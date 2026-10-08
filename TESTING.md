@@ -204,12 +204,12 @@ Below is the complete inventory of all test functions, their logical grouping, t
 ### 6.1 Statement Coverage by Package
 
 ```
-ok      github.com/edsilegxrepo/mylogin             coverage: 94.1% of statements
+ok      github.com/edsilegxrepo/mylogin             coverage: 94.6% of statements
 ok      github.com/edsilegxrepo/mylogin/cmd/mylogin         coverage: 95.3% of statements
 ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-dsn     coverage: 92.3% of statements
 ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-key     coverage: 92.5% of statements
 ---------------------------------------------------------------------------------------
-TOTAL MODULE COVERAGE:                              94.4% of statements
+TOTAL MODULE COVERAGE:                              94.7% of statements
 THRESHOLD REQUIREMENT:                              >= 80.0% (PASSED)
 ```
 
@@ -222,9 +222,10 @@ THRESHOLD REQUIREMENT:                              >= 80.0% (PASSED)
 | `mylogin` | [`login.go`](./login.go) | `Connector` | **100.0%** |
 | `mylogin` | [`login.go`](./login.go) | `DSN` | **91.7%** |
 | `mylogin` | [`login.go`](./login.go) | `LogValue` | **92.9%** |
-| `mylogin` | [`login.go`](./login.go) | `Open` | **75.0%** |
+| `mylogin` | [`login.go`](./login.go) | `Open` | **100.0%** |
 | `mylogin` | [`login.go`](./login.go) | `parseLine` | **100.0%** |
 | `mylogin` | [`login.go`](./login.go) | `Merge` | **100.0%** |
+| `mylogin` | [`defaultfile.go`](./defaultfile.go) | `platformDefaultFile` | **100.0%** |
 | `mylogin` | [`mylogin.go`](./mylogin.go) | `NewKey`, `DefaultFile`, `CheckPermissions`, `Default`, `Get`, `Load` | **100.0%** |
 | `mylogin` | [`mylogin.go`](./mylogin.go) | `Parse`, `NewFile`, `Key`, `ByteOrder`, `PlainText` | **100.0%** |
 | `mylogin` | [`mylogin.go`](./mylogin.go) | `Decode` | **88.9%** |
@@ -235,7 +236,7 @@ THRESHOLD REQUIREMENT:                              >= 80.0% (PASSED)
 | `mylogin` | [`sections.go`](./sections.go) | `Clone`, `Validate`, `WriteTo`, `Login`, `Has`, `Names`, `Set`, `Delete`, `Format`, `Merge` | **100.0%** |
 | `mylogin` | [`sections.go`](./sections.go) | `WriteFile` | **100.0%** |
 | `mylogin` | [`filter.go`](./filter.go) | `FilterSection` | **100.0%** |
-| `mylogin` | [`filter.go`](./filter.go) | `Read` | **90.0%** |
+| `mylogin` | [`filter.go`](./filter.go) | `Read` | **95.0%** |
 | `cmd/mylogin` | [`cmd/mylogin/main.go`](./cmd/mylogin/main.go) | `run`, `runSet`, `runList`, `runRemove`, `Formats` | **95.8% - 100.0%** |
 | `cmd/mylogin-dsn` | [`cmd/mylogin-dsn/main.go`](./cmd/mylogin-dsn/main.go) | `run` | **94.9%** |
 | `cmd/mylogin-key` | [`cmd/mylogin-key/main.go`](./cmd/mylogin-key/main.go) | `printKey`, `run` | **90.2% - 100.0%** |
