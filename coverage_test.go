@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/edsilegxrepo/myloginpath"
+	"github.com/edsilegxrepo/mylogin"
 )
 
 func TestCoreCoverageBoost(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	mylogin "github.com/edsilegxrepo/myloginpath"
+	mylogin "github.com/edsilegxrepo/mylogin"
 	_ "github.com/go-sql-driver/mysql"
 )
 

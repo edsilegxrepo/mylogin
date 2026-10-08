@@ -17,7 +17,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/edsilegxrepo/myloginpath"
+	"github.com/edsilegxrepo/mylogin"
 )
 
 var version = "dev"

@@ -1,6 +1,6 @@
-# Architecture and Technical Specification: `myloginpath`
+# Architecture and Technical Specification: `mylogin`
 
-This document details the software architecture, control flow, security profile, concurrency model, and operational characteristics of the `myloginpath` Go module. It is intended for systems architects, security engineers, and software engineers integrating MySQL login path management into enterprise infrastructure.
+This document details the software architecture, control flow, security profile, concurrency model, and operational characteristics of the `mylogin` Go module. It is intended for systems architects, security engineers, and software engineers integrating MySQL login path management into enterprise infrastructure.
 
 ---
 
@@ -8,7 +8,7 @@ This document details the software architecture, control flow, security profile,
 
 ### 1.1 Architectural Overview
 
-The `myloginpath` library provides serialization, deserialization, manipulation, and runtime database driver integration for MySQL `.mylogin.cnf` configuration files. The internal architecture decouples file-format cryptographic handling from AST parsing, in-memory domain modeling, and SQL connection management.
+The `mylogin` library provides serialization, deserialization, manipulation, and runtime database driver integration for MySQL `.mylogin.cnf` configuration files. The internal architecture decouples file-format cryptographic handling from AST parsing, in-memory domain modeling, and SQL connection management.
 
 ```mermaid
 graph TD
@@ -219,7 +219,7 @@ sequenceDiagram
 
 ```mermaid
 graph TD
-    subgraph CoreRepo["Module: github.com/edsilegxrepo/myloginpath"]
+    subgraph CoreRepo["Module: github.com/edsilegxrepo/mylogin"]
         RootPkg["package mylogin"]
         CmdMain["cmd/mylogin"]
         CmdDSN["cmd/mylogin-dsn"]

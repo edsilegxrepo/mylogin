@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/edsilegxrepo/myloginpath"
+	"github.com/edsilegxrepo/mylogin"
 	"github.com/go-sql-driver/mysql"
 )
 

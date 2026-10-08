@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/edsilegxrepo/myloginpath"
+	"github.com/edsilegxrepo/mylogin"
 )
 
 func TestPrintKey(t *testing.T) {

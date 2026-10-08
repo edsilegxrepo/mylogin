@@ -1,8 +1,8 @@
-# myloginpath - Hardened Go utilities for MySQL's `~/.mylogin.cnf`
+# mylogin - Hardened Go utilities for MySQL's `~/.mylogin.cnf`
 
-[![GoDoc](https://pkg.go.dev/badge/github.com/edsilegxrepo/myloginpath)](https://pkg.go.dev/github.com/edsilegxrepo/myloginpath)
+[![GoDoc](https://pkg.go.dev/badge/github.com/edsilegxrepo/mylogin)](https://pkg.go.dev/github.com/edsilegxrepo/mylogin)
 
-`github.com/edsilegxrepo/myloginpath` is a pure Go library and toolset for reading, writing, and managing MySQL's encrypted credential option files (`~/.mylogin.cnf`), compatible with MySQL's [`mysql_config_editor`](https://dev.mysql.com/doc/refman/8.4/en/mysql-config-editor.html).
+`github.com/edsilegxrepo/mylogin` is a pure Go library and toolset for reading, writing, and managing MySQL's encrypted credential option files (`~/.mylogin.cnf`), compatible with MySQL's [`mysql_config_editor`](https://dev.mysql.com/doc/refman/8.4/en/mysql-config-editor.html).
 
 This project is a hardened fork of [`github.com/dolmen-go/mylogin`](https://github.com/dolmen-go/mylogin), modernized for current Go versions (Go 1.22+) and enhanced with critical bug fixes, credential leak prevention, structured logging safety, and high-level database connection helpers.
 
@@ -34,7 +34,7 @@ This project is a hardened fork of [`github.com/dolmen-go/mylogin`](https://gith
 ## Installation
 
 ```sh
-go get github.com/edsilegxrepo/myloginpath
+go get github.com/edsilegxrepo/mylogin
 ```
 
 ---
@@ -49,7 +49,7 @@ package main
 import (
 	"log"
 
-	"github.com/edsilegxrepo/myloginpath"
+	"github.com/edsilegxrepo/mylogin"
 	_ "github.com/go-sql-driver/mysql"
 )
 
@@ -78,7 +78,7 @@ import (
 	"database/sql"
 	"log"
 
-	"github.com/edsilegxrepo/myloginpath"
+	"github.com/edsilegxrepo/mylogin"
 	_ "github.com/go-sql-driver/mysql"
 )
 
@@ -110,7 +110,7 @@ package main
 import (
 	"log/slog"
 
-	"github.com/edsilegxrepo/myloginpath"
+	"github.com/edsilegxrepo/mylogin"
 )
 
 func main() {
@@ -133,7 +133,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/edsilegxrepo/myloginpath"
+	"github.com/edsilegxrepo/mylogin"
 )
 
 func main() {
@@ -158,7 +158,7 @@ password = "secretpassword"
 }
 ```
 
-See [`example_test.go`](example_test.go) and [pkg.go.dev](https://pkg.go.dev/github.com/edsilegxrepo/myloginpath) for additional testable examples.
+See [`example_test.go`](example_test.go) and [pkg.go.dev](https://pkg.go.dev/github.com/edsilegxrepo/mylogin) for additional testable examples.
 
 ---
 

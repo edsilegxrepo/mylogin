@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/edsilegxrepo/myloginpath"
+	"github.com/edsilegxrepo/mylogin"
 )
 
 // mysql_config_editor generates files with a key where the high 3 bits

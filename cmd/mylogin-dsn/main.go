@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/edsilegxrepo/myloginpath"
+	"github.com/edsilegxrepo/mylogin"
 )
 
 const (

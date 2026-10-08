@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/edsilegxrepo/myloginpath"
+	"github.com/edsilegxrepo/mylogin"
 )
 
 // TestReadWrite verifies that every official MySQL-generated binary fixture in testdata/

@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/edsilegxrepo/myloginpath"
+	"github.com/edsilegxrepo/mylogin"
 	_ "github.com/go-sql-driver/mysql"
 )
 

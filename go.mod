@@ -1,4 +1,4 @@
-module github.com/edsilegxrepo/myloginpath
+module github.com/edsilegxrepo/mylogin
 
 go 1.24.0
 
