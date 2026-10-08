@@ -280,27 +280,21 @@ func runSet(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	var loginPath string
 	flags.StringVar(&loginPath, "login-path", mylogin.DefaultSection, "login path to set")
-	flags.StringVar(&loginPath, "G", mylogin.DefaultSection, "login path (short)")
 
 	var user string
 	flags.StringVar(&user, "user", "", "username")
-	flags.StringVar(&user, "u", "", "username (short)")
 
 	var host string
 	flags.StringVar(&host, "host", "", "hostname")
-	flags.StringVar(&host, "h", "", "hostname (short)")
 
 	var port string
 	flags.StringVar(&port, "port", "", "port")
-	flags.StringVar(&port, "P", "", "port (short)")
 
 	var socket string
 	flags.StringVar(&socket, "socket", "", "socket path")
-	flags.StringVar(&socket, "S", "", "socket path (short)")
 
 	var promptPassword bool
 	flags.BoolVar(&promptPassword, "password", false, "prompt for password")
-	flags.BoolVar(&promptPassword, "p", false, "prompt for password (short)")
 
 	var plainPassword string
 	flags.StringVar(&plainPassword, "pass", "", "password directly (non-interactive)")
@@ -371,7 +365,6 @@ func runRemove(args []string, stdout, stderr io.Writer) int {
 
 	var loginPath string
 	flags.StringVar(&loginPath, "login-path", "", "login path to remove")
-	flags.StringVar(&loginPath, "G", "", "login path (short)")
 
 	if err := flags.Parse(args); err != nil {
 		return exitUsage
@@ -476,7 +469,6 @@ func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 
 	var showVersion bool
 	flags.BoolVar(&showVersion, "version", false, "display version and exit")
-	flags.BoolVar(&showVersion, "V", false, "display version (short)")
 
 	if err := flags.Parse(args); err != nil {
 		return exitUsage

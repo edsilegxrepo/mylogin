@@ -83,7 +83,7 @@ var version = "dev"
 // run coordinates argument parsing, file reading, and key emission.
 //
 // Execution Flow:
-//  1. Parse flags (-version, -V).
+//  1. Parse flags (-version).
 //  2. Collect target file paths from positional arguments (or default file).
 //  3. Decode each file header and emit compacted key to stdout.
 func run(args []string, stdout, stderr io.Writer) int {
@@ -92,7 +92,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	var showVersion bool
 	flags.BoolVar(&showVersion, "version", false, "display version and exit")
-	flags.BoolVar(&showVersion, "V", false, "display version (short)")
 	flags.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: mylogin-key [<file> ...]\n")
 		flags.PrintDefaults()

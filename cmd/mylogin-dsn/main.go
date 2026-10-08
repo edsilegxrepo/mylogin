@@ -72,7 +72,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	flags.StringVar(&database, "database", "", "database name to append to DSN")
 	flags.StringVar(&filename, "file", mylogin.DefaultFile(), "path to .mylogin.cnf")
 	flags.BoolVar(&showVersion, "version", false, "display version and exit")
-	flags.BoolVar(&showVersion, "V", false, "display version (short)")
 	flags.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: mylogin-dsn [-file <path>] [-database <dbname>] [<section> ...]\n")
 		flags.PrintDefaults()

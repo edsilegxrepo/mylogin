@@ -91,7 +91,7 @@ func TestRunMyLoginKey(t *testing.T) {
 	// 4. Version flag
 	stdout.Reset()
 	stderr.Reset()
-	code = run([]string{"-V"}, &stdout, &stderr)
+	code = run([]string{"-version"}, &stdout, &stderr)
 	if code != exitSuccess || !strings.Contains(stdout.String(), "mylogin-key version") {
 		t.Fatalf("expected version output, got code %d, stdout: %s", code, stdout.String())
 	}

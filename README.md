@@ -84,31 +84,30 @@ Usage: mylogin [flags] [<section> ...]
 | `-template` | `string` | `""` | Go `text/template` format string. Available custom template functions include `json`. |
 | `-templateln` | `string` | `""` | Go `text/template` format string with an automatic trailing newline. |
 | `-version` | `bool` | `false` | Display detailed binary version information and exit. |
-| `-V` | `bool` | `false` | Display short version string and exit. |
 
 #### Subcommands
 
 ##### `mylogin set`
 Creates or updates a login path section.
 
-| Flag | Shorthand | Type | Default | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| `-login-path` | `-G` | `string` | `client` | Name of the configuration section to create or update. |
-| `-host` | `-h` | `string` | `""` | Database server hostname or IP address. |
-| `-user` | `-u` | `string` | `""` | Database username. |
-| `-password` | `-p` | `bool` | `false` | Prompts interactively for password on stderr (reads from stdin pipe if redirected). |
-| `-pass` | *(none)* | `string` | `""` | Direct password value for non-interactive automation (e.g. CI/CD or secrets manager). |
-| `-port` | `-P` | `string` | `""` | Database TCP listening port (e.g. `3306`). |
-| `-socket` | `-S` | `string` | `""` | Path to MySQL UNIX domain socket. |
-| `-file` | *(none)* | `string` | `~/.mylogin.cnf` | Path to target option file. |
+| Flag | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `-login-path` | `string` | `client` | Name of the configuration section to create or update. |
+| `-host` | `string` | `""` | Database server hostname or IP address. |
+| `-user` | `string` | `""` | Database username. |
+| `-password` | `bool` | `false` | Prompts interactively for password on stderr (reads from stdin pipe if redirected). |
+| `-pass` | `string` | `""` | Direct password value for non-interactive automation (e.g. CI/CD or secrets manager). |
+| `-port` | `string` | `""` | Database TCP listening port (e.g. `3306`). |
+| `-socket` | `string` | `""` | Path to MySQL UNIX domain socket. |
+| `-file` | `string` | `~/.mylogin.cnf` | Path to target option file. |
 
 ##### `mylogin remove` (alias: `rm`)
 Removes an entire login path section from `.mylogin.cnf`.
 
-| Flag | Shorthand | Type | Default | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| `-login-path` | `-G` | `string` | `""` | Target section name to remove (can also be passed as positional argument). |
-| `-file` | *(none)* | `string` | `~/.mylogin.cnf` | Path to target option file. |
+| Flag | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `-login-path` | `string` | `""` | Target section name to remove (can also be passed as positional argument). |
+| `-file` | `string` | `~/.mylogin.cnf` | Path to target option file. |
 
 ##### `mylogin list` (alias: `ls`)
 Lists all configured login path section names, one per line.
@@ -132,7 +131,6 @@ Usage: mylogin-dsn [-file <path>] [-database <dbname>] [<section> ...]
 | `-file` | `string` | `~/.mylogin.cnf` | Path to option file. |
 | `-database` | `string` | `""` | Database schema name appended to the resulting DSN. |
 | `-version` | `bool` | `false` | Display version and exit. |
-| `-V` | `bool` | `false` | Short version display. |
 
 ---
 
@@ -141,13 +139,12 @@ Usage: mylogin-dsn [-file <path>] [-database <dbname>] [<section> ...]
 Inspects, compacts, and displays the 20-byte encryption key embedded in the header of `.mylogin.cnf`.
 
 ```
-Usage: mylogin-key [-version] [-V] [<file> ...]
+Usage: mylogin-key [-version] [<file> ...]
 ```
 
 | Flag | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `-version` | `bool` | `false` | Display version and exit. |
-| `-V` | `bool` | `false` | Short version display. |
 | `[<file> ...]` | `string` | `~/.mylogin.cnf` | Optional one or more files to inspect (defaults to standard login file). |
 
 ---
@@ -245,7 +242,7 @@ Provision credentials non-interactively in automated deployment scripts using ei
 # Set credentials non-interactively using the -pass flag (e.g. from vault or secrets manager)
 mylogin set -login-path=service_db -host=db.production.internal -port=3306 -user=svc_writer -pass=VaultProvidedSecret456
 
-# Or pass password via stdin pipe with -password (-p) to prevent exposure in process tables (ps aux)
+# Or pass password via stdin pipe with -password to prevent exposure in process tables (ps aux)
 echo "VaultProvidedSecret456" | mylogin set -login-path=service_db -host=db.production.internal -port=3306 -user=svc_writer -password
 ```
 

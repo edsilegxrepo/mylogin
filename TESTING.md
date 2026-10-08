@@ -148,9 +148,9 @@ The test suite is organized into unit, integration, documentation, and command-l
     ├── mylogin/
     │   └── main_test.go          # Subcommands (set, remove, list) and flag formatting tests
     ├── mylogin-dsn/
-    │   └── main_test.go          # DSN CLI generation and -V version tests
+    │   └── main_test.go          # DSN CLI generation and -version version tests
     └── mylogin-key/
-        └── main_test.go          # Key inspection CLI and -V version tests
+        └── main_test.go          # Key inspection CLI and -version version tests
 ```
 
 ---
@@ -190,10 +190,10 @@ Below is the complete inventory of all test functions, their logical grouping, t
 | **CLI: mylogin** | [`TestLoginAsMap`](./cmd/mylogin/main_test.go#L41) | Verifies map projection of credentials for template rendering. | Map keys match expected credential options. |
 | **CLI: mylogin** | [`TestFormatsPrint`](./cmd/mylogin/main_test.go#L57) | Tests output formatters (`-json`, `-replay`, `-remove`, `-template`). | JSON emits valid JSON; replay emits valid `mysql_config_editor set` strings. |
 | **CLI: mylogin** | [`TestRunMyLogin`](./cmd/mylogin/main_test.go#L178) | Tests CLI execution with custom flag combinations. | Exits with status code 0 on valid flags; prints appropriate usage on errors. |
-| **CLI: mylogin** | [`TestRunMyLoginSubcommands`](./cmd/mylogin/main_test.go#L305) | Tests `set`, `remove`, and `list` subcommands and `-V` flag. | Successfully sets, lists, and removes credentials; prints version correctly. |
-| **CLI: mylogin-dsn** | [`TestRunDSN`](./cmd/mylogin-dsn/main_test.go#L34) | Tests DSN generation CLI with flags (`-database`, `-V`). | Emits formatted DSN to stdout; handles nonexistent sections with exit code 5. |
+| **CLI: mylogin** | [`TestRunMyLoginSubcommands`](./cmd/mylogin/main_test.go#L305) | Tests `set`, `remove`, and `list` subcommands and `-version` flag. | Successfully sets, lists, and removes credentials; prints version correctly. |
+| **CLI: mylogin-dsn** | [`TestRunDSN`](./cmd/mylogin-dsn/main_test.go#L34) | Tests DSN generation CLI with flags (`-database`, `-version`). | Emits formatted DSN to stdout; handles nonexistent sections with exit code 5. |
 | **CLI: mylogin-key** | [`TestPrintKey`](./cmd/mylogin-key/main_test.go#L34) | Validates raw hex key output from encrypted file headers. | Emits exact 40-character hex key string to stdout. |
-| **CLI: mylogin-key** | [`TestRunMyLoginKey`](./cmd/mylogin-key/main_test.go#L58) | Tests CLI key inspector execution, file resolution, and `-V` flag. | Prints key or version string cleanly with exit status 0. |
+| **CLI: mylogin-key** | [`TestRunMyLoginKey`](./cmd/mylogin-key/main_test.go#L58) | Tests CLI key inspector execution, file resolution, and `-version` flag. | Prints key or version string cleanly with exit status 0. |
 | **Live Integration** | [`TestLiveEndToEndWorkflow`](./integration_test.go#L306) | Executes end-to-end workflow against a real MySQL daemon listener. | Creates DB/user, verifies `mysql_config_editor` file generation, and queries live tables. |
 | **Live Integration** | [`TestLiveCLIToolsWorkflow`](./integration_test.go#L552) | Compiles and executes CLI binaries against live MySQL server. | `mylogin set`, `mylogin list`, and `mylogin-dsn` operate against real database. |
 
@@ -205,11 +205,11 @@ Below is the complete inventory of all test functions, their logical grouping, t
 
 ```
 ok      github.com/edsilegxrepo/mylogin             coverage: 93.0% of statements
-ok      github.com/edsilegxrepo/mylogin/cmd/mylogin         coverage: 95.9% of statements
-ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-dsn     coverage: 92.7% of statements
-ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-key     coverage: 92.8% of statements
+ok      github.com/edsilegxrepo/mylogin/cmd/mylogin         coverage: 95.3% of statements
+ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-dsn     coverage: 92.3% of statements
+ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-key     coverage: 92.5% of statements
 ---------------------------------------------------------------------------------------
-TOTAL MODULE COVERAGE:                              94.3% of statements
+TOTAL MODULE COVERAGE:                              93.9% of statements
 THRESHOLD REQUIREMENT:                              >= 80.0% (PASSED)
 ```
 

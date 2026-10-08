@@ -290,7 +290,7 @@ func TestRunMyLogin(t *testing.T) {
 	// 10. Version flag
 	stdout.Reset()
 	stderr.Reset()
-	code = run([]string{"-V"}, &stdout, &stderr)
+	code = run([]string{"-version"}, &stdout, &stderr)
 	if code != exitSuccess || !strings.Contains(stdout.String(), "mylogin version") {
 		t.Fatalf("expected version output, got code %d, stdout: %s", code, stdout.String())
 	}
@@ -329,10 +329,10 @@ func TestRunMyLoginSubcommands(t *testing.T) {
 	code = runWithStdin([]string{
 		"set",
 		"-file", confPath,
-		"-G", "prod",
-		"-u", "admin",
-		"-h", "10.0.0.1",
-		"-p",
+		"-login-path", "prod",
+		"-user", "admin",
+		"-host", "10.0.0.1",
+		"-password",
 	}, strings.NewReader("PromptSecret456\n"), &stdout, &stderr)
 	if code != exitSuccess {
 		t.Fatalf("expected exitSuccess for set with prompt, got %d, stderr: %s", code, stderr.String())
@@ -353,7 +353,7 @@ func TestRunMyLoginSubcommands(t *testing.T) {
 	// 4. Test remove
 	stdout.Reset()
 	stderr.Reset()
-	code = run([]string{"remove", "-file", confPath, "-G", "staging"}, &stdout, &stderr)
+	code = run([]string{"remove", "-file", confPath, "-login-path", "staging"}, &stdout, &stderr)
 	if code != exitSuccess {
 		t.Fatalf("expected exitSuccess for remove, got %d, stderr: %s", code, stderr.String())
 	}
