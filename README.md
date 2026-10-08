@@ -8,8 +8,10 @@ The `github.com/edsilegxrepo/mylogin` module is an enterprise-grade Go library a
 
 ## Technical Documentation Index
 
-- [Architecture and Technical Specification](./ARCHITECTURE.md): Design decisions, cryptographic mechanics, data flows, edge cases, and memory models.
-- [Test Suite and Verification Architecture](./TESTING.md): Test harness architecture, test catalog, 93.4% coverage metrics, and live integration verification.
+To maintain a single source of truth without content duplication, detailed architectural models and test specifications reside in dedicated documentation files:
+
+- [ARCHITECTURE.md](./ARCHITECTURE.md): Authoritative specification for system architecture, AES-128-ECB mechanics, AST parsing, concurrency guarantees, security threat models, and package dependencies.
+- [TESTING.md](./TESTING.md): Authoritative specification for test suite architecture, logic flows, master test inventory, live MySQL daemon provisioning, and statement coverage metrics (93.4%).
 
 ---
 
@@ -24,6 +26,8 @@ MySQL client utilities read obfuscated authentication credentials from `~/.mylog
 3. **Automated Credential Redaction**: Mask credentials by default in [`Login.String()`](./login.go#L237) and implement [`slog.LogValuer`](./login.go#L242) so that passing credential instances to structured logging systems (`log/slog`) never leaks passwords to log aggregators.
 4. **Resilience and Panic Immunity**: Ensure robust AST parsing that rejects malformed tokens, prevents nil pointer dereferences, handles arbitrary newline formats, and uses atomic temporary file replacement for zero-corruption file writes.
 
+*For architectural design choices, component block diagrams, and edge-case handling strategies, refer to [ARCHITECTURE.md § 1. Architecture, Design Choices, Assumptions, Edge Cases, and Efficiency](./ARCHITECTURE.md#1-architecture-design-choices-assumptions-edge-cases-and-efficiency).*
+
 ---
 
 ## 2. Security Assessment
@@ -31,84 +35,32 @@ MySQL client utilities read obfuscated authentication credentials from `~/.mylog
 ### 2.1 Encryption in Transit
 
 The module parses connection parameters from `.mylogin.cnf` and maps security configurations directly into `*mysql.Config` instances from [`github.com/go-sql-driver/mysql`](https://github.com/go-sql-driver/mysql):
-
-- **SSL Mode Translation**: Client directives specified via `ssl-mode` are mapped directly to driver TLS states:
-  - `DISABLED`: Disables TLS on the wire (`cfg.TLSConfig = "false"`).
-  - `REQUIRED`: Enforces TLS connection negotiation (`cfg.TLSConfig = "true"`).
-  - `VERIFY_CA` / `VERIFY_IDENTITY`: Configures certificate chain validation modes.
-- **Wire Protection**: All database queries executed through handles returned by `Login.Open()` enforce configured in-transit encryption between the client process and the MySQL server.
+- `ssl-mode` parameters (`DISABLED`, `REQUIRED`, `VERIFY_CA`, `VERIFY_IDENTITY`) translate directly into driver TLS configurations.
+- Queries executed through handles returned by `Login.Open()` enforce encrypted TLS wire transport between the client process and MySQL.
 
 ### 2.2 Secret Management and Memory Sanitization
 
-- **Credential Redaction**: The string representation of any `Login` struct automatically masks the password:
-  ```go
-  // Output format from login.String() or login.RedactedDSN()
-  "app_user:******@tcp(db.example.internal:3306)/"
-  ```
-- **Structured Telemetry Protection**: The `Login` struct implements the `slog.LogValuer` interface. Passing `*Login` to `slog.Info`, `slog.Warn`, or `slog.Error` generates structured groups with sensitive fields replaced by `******`.
-- **In-Memory Sanitization**: Cryptographic keys implement [`Key.Zero()`](./mylogin.go#L63) and credential models implement [`Login.Zero()`](./login.go#L111). Applications can explicitly wipe key bytes and credential pointers from process heap memory immediately after establishing database connections.
+- **Credential Redaction**: `Login.String()` and `Login.RedactedDSN()` mask passwords (`app_user:******@tcp(host:port)/`).
+- **Structured Telemetry Protection**: Passing `*Login` to `log/slog` formats sensitive fields with `******`.
+- **In-Memory Sanitization**: Explicit memory scrubbing via [`Key.Zero()`](./mylogin.go#L63) and [`Login.Zero()`](./login.go#L111) clears key bytes and sensitive pointers from process heap memory.
 
-### 2.3 Authentication Configuration
+### 2.3 Access Control and Unprivileged Execution Context
 
-- **Supported Mechanisms**: Compatible with all MySQL authentication plugins supported by `go-sql-driver/mysql`, including `caching_sha2_password`, `mysql_native_password`, and `sha256_password`.
-- **Direct Connector Pattern**: By leveraging `mysql.NewConnector`, the application bypasses connection string serialization. The driver maintains credentials inside internal driver state, protecting credentials against inspection via process argument listings or generic connection URL inspectors.
+- **Host Discretionary Access Control (DAC)**: Security relies on OS file isolation. On POSIX filesystems, [`CheckPermissions`](./mylogin.go#L126) rejects files with permissions more permissive than `0600` (`-rw-------`).
+- **Unprivileged Runtime**: Operates strictly within user-space context (`~/.mylogin.cnf`). No root privileges or elevated capabilities (`CAP_*`) are required, supporting non-root container deployment standards.
+- **Dependency Audit**: Verified clean with 0 known vulnerabilities (`govulncheck`) and 0 static security issues (`gosec`).
 
-### 2.4 Access Control and RBAC
-
-- **Host Discretionary Access Control (DAC)**: The security model of `.mylogin.cnf` relies on host-level operating system user boundaries.
-- **Strict Permission Enforcement**: On POSIX filesystems, [`CheckPermissions`](./mylogin.go#L126) validates that the target file has permissions no more permissive than `0600` (`-rw-------`). If group or world permissions (`0644`, `0666`, etc.) are detected, file operations abort immediately with an error.
-- **Atomic File Creation**: When writing configuration updates, [`WriteFile`](./mylogin.go#L471) initializes descriptors strictly with mode `0600` prior to writing ciphertext, eliminating permission race conditions during file generation.
-
-### 2.5 Current and Non-Vulnerable Libraries Used
-
-The module maintains a minimal dependency profile:
-
-| Dependency | Version | Vulnerability Status | Architectural Role |
-| :--- | :--- | :--- | :--- |
-| `github.com/go-sql-driver/mysql` | `v1.10.1` | 0 Known Vulnerabilities (`govulncheck`) | Official MySQL driver, connection configuration, connector interfaces. |
-| `golang.org/x/term` | Standard Subrepo | 0 Known Vulnerabilities (`govulncheck`) | Terminal raw mode handling for non-echoing password prompts. |
-| `filippo.io/edwards25519` | `v1.2.0` | 0 Known Vulnerabilities (`govulncheck`) | Indirect cryptographic dependency required by `go-sql-driver/mysql`. |
-
-- **Security Auditing**: The repository is continuously audited using `govulncheck ./...` (0 vulnerabilities found) and `gosec ./...` (0 security findings across all AST rules).
-
-### 2.6 Unprivileged Execution Context
-
-The module and its associated command-line binaries are designed to operate exclusively in unprivileged user space:
-- No root privileges, `setuid` bits, or elevated capabilities (`CAP_*`) are required.
-- All configuration files default to the standard user home directory (`~/.mylogin.cnf`).
-- Complies with non-root container deployment standards (e.g. running under arbitrary non-zero UIDs in Kubernetes or OpenShift).
+*For the complete threat model, cryptographic limitations of AES-128-ECB, security architecture diagrams, and runtime module inventories, refer to [ARCHITECTURE.md § 5. Security Architecture](./ARCHITECTURE.md#5-security-architecture) and [ARCHITECTURE.md § 4. Dependencies and Runtime Environment](./ARCHITECTURE.md#4-dependencies-and-runtime-environment).*
 
 ---
 
-## 3. Code Quality Assessment and Best Practices
+## 3. Code Quality and Verification Summary
 
-### 3.1 Codebase Metrics
+- **Total Module Statement Coverage**: **93.4%** across all packages, verified with Go's data race detector (`-race`).
+- **Compiler Hardening**: Built with `-trimpath` and `-buildmode=pie` Position Independent Executables with stripped debug symbols (`-ldflags "-s -w"`).
+- **Code Standards**: 100% compliant with canonical `gofumpt` formatting, `go vet`, and `gosec` AST analysis.
 
-- **Total Module Statement Coverage**: **93.4%** across all packages (exceeding the 80% enterprise standard).
-- **Concurrency Verification**: All unit and integration suites pass under the Go race detector (`go test -race ./...`).
-- **Static Analysis Compliance**: 100% compliant with `go vet`, `gofumpt`, and `gosec`.
-- **Compiler Hardening**: Built with `-trimpath` (strips absolute filesystem paths from compiled binaries) and `-buildmode=pie` (generates Position Independent Executables compatible with OS ASLR protections).
-
-### 3.2 Automated Makefile Quality Pipeline
-
-The repository provides automated pipeline targets in [Makefile](./Makefile):
-
-```sh
-# 1. Format code according to strict canonical rules
-make fmt
-
-# 2. Run static analysis (go vet, govulncheck, gosec)
-make vet
-
-# 3. Execute unit tests with data race detection
-make test
-
-# 4. Generate statement coverage report without polluting repo
-make coverage
-
-# 5. Build hardened, stripped PIE binaries
-make build
-```
+*For complete statement coverage tables, package breakdowns, and execution recipes in Bash and PowerShell, refer to [TESTING.md § 6. Code Coverage Report](./TESTING.md#6-code-coverage-report) and [TESTING.md § 8. How to Run the Tests](./TESTING.md#8-how-to-run-the-tests).*
 
 ---
 
@@ -387,5 +339,5 @@ go install github.com/edsilegxrepo/mylogin/cmd/mylogin-key@latest
 ## 7. License and Attribution
 
 - Original work Copyright 2016-2018 Olivier Mengué.
-- Modernized and hardened fork Copyright 2026.
+- Modernized and hardened fork Copyright 2026 Critical Systems.
 - Licensed under the Apache License, Version 2.0. See [LICENSE](./LICENSE) for details.
