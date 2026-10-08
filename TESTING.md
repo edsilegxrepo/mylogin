@@ -204,12 +204,12 @@ Below is the complete inventory of all test functions, their logical grouping, t
 ### 6.1 Statement Coverage by Package
 
 ```
-ok      github.com/edsilegxrepo/mylogin             coverage: 93.0% of statements
+ok      github.com/edsilegxrepo/mylogin             coverage: 94.1% of statements
 ok      github.com/edsilegxrepo/mylogin/cmd/mylogin         coverage: 95.3% of statements
 ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-dsn     coverage: 92.3% of statements
 ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-key     coverage: 92.5% of statements
 ---------------------------------------------------------------------------------------
-TOTAL MODULE COVERAGE:                              93.9% of statements
+TOTAL MODULE COVERAGE:                              94.4% of statements
 THRESHOLD REQUIREMENT:                              >= 80.0% (PASSED)
 ```
 
@@ -230,10 +230,10 @@ THRESHOLD REQUIREMENT:                              >= 80.0% (PASSED)
 | `mylogin` | [`mylogin.go`](./mylogin.go) | `Decode` | **88.9%** |
 | `mylogin` | [`mylogin.go`](./mylogin.go) | `Encode` | **89.2%** |
 | `mylogin` | [`mylogin.go`](./mylogin.go) | `Read` | **78.6%** |
-| `mylogin` | [`mylogin.go`](./mylogin.go) | `ReadLogin`, `ReadSections` | **83.3%** |
-| `mylogin` | [`mylogin.go`](./mylogin.go) | `WriteFile` | **69.2%** |
+| `mylogin` | [`mylogin.go`](./mylogin.go) | `ReadLogin`, `ReadSections` | **100.0%** |
+| `mylogin` | [`mylogin.go`](./mylogin.go) | `WriteFile` | **76.9%** |
 | `mylogin` | [`sections.go`](./sections.go) | `Clone`, `Validate`, `WriteTo`, `Login`, `Has`, `Names`, `Set`, `Delete`, `Format`, `Merge` | **100.0%** |
-| `mylogin` | [`sections.go`](./sections.go) | `WriteFile` | **75.0%** |
+| `mylogin` | [`sections.go`](./sections.go) | `WriteFile` | **100.0%** |
 | `mylogin` | [`filter.go`](./filter.go) | `FilterSection` | **100.0%** |
 | `mylogin` | [`filter.go`](./filter.go) | `Read` | **90.0%** |
 | `cmd/mylogin` | [`cmd/mylogin/main.go`](./cmd/mylogin/main.go) | `run`, `runSet`, `runList`, `runRemove`, `Formats` | **95.8% - 100.0%** |

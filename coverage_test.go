@@ -238,8 +238,17 @@ func TestCoreCoverageBoost(t *testing.T) {
 	if err := mylogin.CheckPermissions(filepath.Join(tempDir, "non_existent_file")); err == nil {
 		t.Errorf("expected error on non existent file in CheckPermissions")
 	}
+	if _, err := mylogin.ReadLogin(filepath.Join(tempDir, "non_existent_file"), nil); err == nil {
+		t.Errorf("expected error in ReadLogin for non-existent file")
+	}
+	corruptedFile := filepath.Join(tempDir, "corrupted.cnf")
+	if err := os.WriteFile(corruptedFile, []byte("short"), 0o600); err == nil {
+		if _, err := mylogin.ReadSections(corruptedFile); err == nil {
+			t.Errorf("expected error in ReadSections for corrupted file")
+		}
+	}
 
-	// 11. Test WriteFile error branches (failing reader, invalid directory)
+	// 11. Test WriteFile error branches (failing reader, invalid directory, read-only directory, directory rename target)
 	badReader := &failingCoverageReader{}
 	if err := mylogin.WriteFile(filepath.Join(tempDir, "bad.cnf"), badReader); err == nil {
 		t.Errorf("expected WriteFile to fail with bad reader")
@@ -248,6 +257,19 @@ func TestCoreCoverageBoost(t *testing.T) {
 	if err := mylogin.WriteFile(impossibleDirFile, strings.NewReader("[client]\n")); err == nil {
 		t.Errorf("expected WriteFile to fail with invalid dir path")
 	}
+	readOnlyDir := filepath.Join(tempDir, "readonly_dir")
+	if err := os.MkdirAll(readOnlyDir, 0o500); err == nil {
+		defer func() { _ = os.Chmod(readOnlyDir, 0o700) }()
+		if err := mylogin.WriteFile(filepath.Join(readOnlyDir, "test.cnf"), strings.NewReader("[client]\n")); err == nil {
+			t.Errorf("expected WriteFile to fail in read-only directory")
+		}
+	}
+	existingDirAsTarget := filepath.Join(tempDir, "existing_dir_target")
+	if err := os.MkdirAll(existingDirAsTarget, 0o700); err == nil {
+		if err := mylogin.WriteFile(existingDirAsTarget, strings.NewReader("[client]\n")); err == nil {
+			t.Errorf("expected WriteFile to fail when target filename is an existing directory")
+		}
+	}
 
 	// 12. Test nil Login Clone
 	var nilLogin *mylogin.Login
@@ -255,7 +277,7 @@ func TestCoreCoverageBoost(t *testing.T) {
 		t.Errorf("expected nilLogin.Clone() == nil")
 	}
 
-	// 13. Test Sections.Format & WriteTo with invalid section
+	// 13. Test Sections.Format & WriteTo & WriteFile with invalid section
 	badSecs := mylogin.Sections{{Name: ""}}
 	if _, err := badSecs.Format(); err == nil {
 		t.Errorf("expected badSecs.Format() to fail")
@@ -263,6 +285,9 @@ func TestCoreCoverageBoost(t *testing.T) {
 	var badBuf bytes.Buffer
 	if _, err := badSecs.WriteTo(&badBuf); err == nil {
 		t.Errorf("expected badSecs.WriteTo() to fail")
+	}
+	if err := badSecs.WriteFile(filepath.Join(tempDir, "should_fail.cnf")); err == nil {
+		t.Errorf("expected badSecs.WriteFile() to fail on invalid section name")
 	}
 
 	// 14. Test Sections.Merge with multiple sections & default fallback
