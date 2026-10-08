@@ -7,10 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [v2.0.0] - 2026-10-07
+## [v1.5.0] - 2026-10-07
 
 ### Overview
-Version 2.0.0 marks a major enterprise hardening and modernization milestone following the fork from `github.com/dolmen-go/mylogin`. This release transforms the project into a production-grade cryptographic library and CLI toolkit featuring direct `database/sql` driver connector integration, in-memory credential sanitization, atomic filesystem persistence, live integration testing against MySQL daemons, zero-disclosure telemetry, and complete elimination of legacy single-letter CLI shorthand flags.
+Version 1.5.0 marks a major enterprise hardening and modernization milestone following the fork from `github.com/dolmen-go/mylogin`. This release transforms the project into a production-grade cryptographic library and CLI toolkit featuring direct `database/sql` driver connector integration, in-memory credential sanitization, atomic filesystem persistence, live integration testing against MySQL daemons, zero-disclosure telemetry, and complete elimination of legacy single-letter CLI shorthand flags.
 
 ### Added
 
@@ -64,7 +64,7 @@ Version 2.0.0 marks a major enterprise hardening and modernization milestone fol
 
 ---
 
-## [v1.1.0] - 2023-04-02
+## [v1.1.0] - 2023-04-02 — Upstream [dolmen-go/mylogin](https://github.com/dolmen-go/mylogin)
 
 ### Added
 - Added `-templateln` format flag to `cmd/mylogin` for emitting Go template output with an automatic trailing newline.
@@ -72,7 +72,7 @@ Version 2.0.0 marks a major enterprise hardening and modernization milestone fol
 
 ---
 
-## [v1.0.0] - 2023-01-24
+## [v1.0.0] - 2023-01-24 — Upstream [dolmen-go/mylogin](https://github.com/dolmen-go/mylogin)
 
 ### Fixed
 - Fixed critical incomplete read bug during mylogin option file streaming and decryption.
@@ -82,3 +82,8 @@ Version 2.0.0 marks a major enterprise hardening and modernization milestone fol
 - Initial implementation of AES-128-CBC decryption and XOR key folding compatible with MySQL `mysql_config_editor`.
 - CLI utilities `mylogin`, `mylogin-dsn`, and `mylogin-key`.
 - INI section tokenization and basic DSN formatting for `go-sql-driver/mysql`.
+
+<!-- Release Link Definitions -->
+[v1.5.0]: https://github.com/edsilegxrepo/mylogin/releases/tag/v1.5.0
+[v1.1.0]: https://github.com/dolmen-go/mylogin/releases/tag/v1.1.0
+[v1.0.0]: https://github.com/dolmen-go/mylogin/releases/tag/v1.0.0
