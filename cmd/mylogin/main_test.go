@@ -1,3 +1,28 @@
+// Package main provides unit and integration test coverage for the mylogin CLI tool.
+//
+// Objective: Comprehensive unit testing for the mylogin CLI command binary, validating
+// formatters, CLI flag dispatching, error mapping, stream filtering, and subcommands (set, remove, list).
+//
+// Core Components:
+//   - TestLoginAsMap: Data model flattening into generic key-value dictionaries.
+//   - TestFormatsPrint: Output verification across JSON, Replay, Remove, and Template formatters.
+//   - TestRunMyLogin: Flag handling, raw and filtered stream dumping, and exit code validation.
+//   - TestFormatTemplateInvalid: Parser rejection of malformed template strings.
+//   - TestRunMyLoginSubcommands: Subcommand workflows (set with password, stdin prompts, list, remove).
+//
+// Test Strategy:
+//   - In-Process Execution: Invokes run() and runWithStdin() directly with in-memory bytes.Buffer
+//     to capture stdout and stderr, enabling rapid regression testing without subprocess execution.
+//   - Exit Code Assertions: Rigorously verifies all standard exit codes (exitSuccess, exitUsage,
+//     exitFileError, exitFormatError, exitNotFound).
+//   - Isolation: Executes all file-mutating tests within ephemeral directories created via t.TempDir().
+//
+// Functionality:
+//   - Validates CLI argument routing, output formatting accuracy, and safe file modifications.
+//
+// Data Flow:
+//
+//	CLI Flag Slice -> runWithStdin -> captured stdout/stderr buffers -> Assert output & exit code.
 package main
 
 import (

@@ -1,3 +1,23 @@
+// Package main provides unit test coverage for the mylogin-key CLI tool.
+//
+// Objective: Validate key entropy bit-packing, raw hexadecimal fallback formatting,
+// file decoding, and process exit codes within the mylogin-key CLI command binary.
+//
+// Core Components:
+//   - TestPrintKey: Bit-compaction verification for standard 5-bit keys and fallback hex dump for arbitrary keys.
+//   - TestRunMyLoginKey: End-to-end execution testing on valid files, missing files, invalid flags, and version output.
+//
+// Test Strategy:
+//   - Dual-Pathway Assertion: Proves that keys with all bytes < 32 produce compacted hex+base64,
+//     while keys containing bytes >= 32 gracefully fall back to full hex dumps.
+//   - Exit Code Validation: Asserts exact matching of exitSuccess, exitFileError, and exitUsage.
+//
+// Functionality:
+//   - Confirms key inspection diagnostics operate accurately and safely across all inputs.
+//
+// Data Flow:
+//
+//	Test Key / File -> printKey / run -> captured stdout/stderr -> Assert output string and exit code.
 package main
 
 import (

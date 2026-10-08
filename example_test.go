@@ -1,3 +1,27 @@
+// Package mylogin_test provides executable examples and external black-box test coverage.
+//
+// Objective: Provide verifiable, executable Go documentation examples illustrating primary
+// library consumption patterns for senior engineers and system architects.
+//
+// Core Components:
+//   - ExampleDefault: Basic credential retrieval from standard file locations.
+//   - ExampleGet: Targeted login-path retrieval with client-section inheritance.
+//   - ExampleLogin_Open: Zero-DSN database handle instantiation via mysql.NewConnector.
+//   - ExampleLogin_Config: Advanced connection pool fine-tuning via *mysql.Config.
+//   - ExampleLogin_RedactedDSN: Secure telemetry masking of database credentials.
+//   - ExampleSections_WriteFile: Full programmatic file creation, AES encryption, and atomic write.
+//
+// Test Strategy:
+//   - Black-box API validation: Examples interact solely through the exported package surface.
+//   - Deterministic Output Validation: Go test runner verifies stdout against // Output: assertions.
+//   - Ephemeral Sandbox: File-system mutating examples operate within isolated temporary directories.
+//
+// Functionality:
+//   - Demonstrates typical application initialization, database connection management, and configuration synthesis.
+//
+// Data Flow:
+//
+//	Hardcoded / Generated Input -> mylogin Exported APIs -> Stdout / Mock DB Handles -> Assertion against Output.
 package mylogin_test
 
 import (

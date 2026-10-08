@@ -8,6 +8,26 @@ import (
 	"strings"
 )
 
+// Objective: Provide an Abstract Syntax Tree (AST) for the complete contents of
+// a mylogin.cnf file, enforcing syntax validation, injection mitigation,
+// deterministic ordering, and canonical INI serialization.
+//
+// Core Components:
+//   - Section: Single named configuration block containing associated Login options.
+//   - Sections: Slice of Section structs representing the ordered AST of the file.
+//   - Validate: Injection defenses verifying section names and option keys.
+//   - escapeValue / WriteTo: Canonical serialization matching MySQL 8.0.24+ standards.
+//   - WriteFile: High-level atomic file encryption helper.
+//
+// Functionality:
+//   - Querying: Login(name), Has(name), Names().
+//   - Mutation: Set(name, login), Delete(name), Clone().
+//   - Aggregation: Merge(sectionNames) performing precedence-based merging.
+//   - Persistence: Format() string generator and WriteFile(filename) atomic writer.
+//
+// Data Flow:
+//   Decrypted Stream -> Parse -> Sections AST -> Mutation/Query -> WriteTo/Format -> Encode -> Disk.
+
 var (
 	// ErrInvalidSectionName is returned when a section name contains invalid characters.
 	ErrInvalidSectionName = errors.New("invalid section name: contains illegal characters (newlines or brackets)")
@@ -18,11 +38,11 @@ var (
 
 // Section represents one section of the plaintext content of mylogin.cnf.
 type Section struct {
-	Name  string `json:"name"`
-	Login Login  `json:"login"`
+	Name  string `json:"name"`  // Section header name, e.g. "client" or "production"
+	Login Login  `json:"login"` // Structured credential options defined in this section
 }
 
-// Clone returns a deep copy of the Section.
+// Clone returns an independent, deep copy of the Section.
 func (s *Section) Clone() Section {
 	return Section{
 		Name:  s.Name,
@@ -31,6 +51,7 @@ func (s *Section) Clone() Section {
 }
 
 // Validate verifies that the section name and its options do not contain injection characters.
+// Rejects bracket literals, carriage returns, null bytes, and delimiter characters.
 func (s *Section) Validate() error {
 	trimmed := strings.TrimSpace(s.Name)
 	if trimmed == "" {
@@ -57,13 +78,14 @@ func (s *Section) Validate() error {
 }
 
 // escapeValue properly escapes quotes and backslashes for MySQL option files.
+// Complies with MySQL 8.0.24+ formatting standards (enclosed in double quotes with \ and " escaped).
 func escapeValue(v string) string {
-	// MySQL 8.0.24+ standard: enclosed in quotes with \" and \\ escaped
 	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "\t", `\t`)
 	return `"` + r.Replace(v) + `"`
 }
 
 // WriteTo writes the section in canonical, injection-safe MySQL option file format.
+// Validates syntax before emitting bytes to w.
 func (s *Section) WriteTo(w io.Writer) (int64, error) {
 	if err := s.Validate(); err != nil {
 		return 0, err
@@ -72,6 +94,7 @@ func (s *Section) WriteTo(w io.Writer) (int64, error) {
 	var buf bytes.Buffer
 	buf.WriteString("[" + strings.TrimSpace(s.Name) + "]\n")
 
+	// Helper closure to write non-nil options with canonical escaping
 	writeOpt := func(k string, v *string) {
 		if v != nil {
 			buf.WriteString(k + " = " + escapeValue(*v) + "\n")
@@ -84,6 +107,7 @@ func (s *Section) WriteTo(w io.Writer) (int64, error) {
 	writeOpt("port", s.Login.Port)
 	writeOpt("socket", s.Login.Socket)
 
+	// Write any additional non-standard options
 	for k, v := range s.Login.Extra {
 		buf.WriteString(strings.TrimSpace(k) + " = " + escapeValue(v) + "\n")
 	}
@@ -93,6 +117,7 @@ func (s *Section) WriteTo(w io.Writer) (int64, error) {
 }
 
 // Sections represents the structured content of the plaintext of mylogin.cnf.
+// It is an ordered slice of Section instances.
 type Sections []Section
 
 // Login returns the Login from the section with the given name, or nil if not found.
@@ -105,12 +130,12 @@ func (sections Sections) Login(section string) *Login {
 	return nil
 }
 
-// Has reports whether a section with the given name exists.
+// Has reports whether a section with the given name exists in the collection.
 func (sections Sections) Has(section string) bool {
 	return sections.Login(section) != nil
 }
 
-// Names returns the names of all sections in order.
+// Names returns the names of all sections in the order they appear in the file.
 func (sections Sections) Names() []string {
 	names := make([]string, len(sections))
 	for i, s := range sections {
@@ -120,6 +145,7 @@ func (sections Sections) Names() []string {
 }
 
 // Set adds or replaces the section with the given name.
+// Existing sections with matching names are updated in-place; new sections are appended.
 func (sections *Sections) Set(name string, login Login) {
 	for i := range *sections {
 		if (*sections)[i].Name == name {
@@ -144,7 +170,7 @@ func (sections *Sections) Delete(name string) bool {
 	return false
 }
 
-// Clone returns a deep copy of Sections.
+// Clone returns an independent, deep copy of Sections.
 func (sections Sections) Clone() Sections {
 	cp := make(Sections, len(sections))
 	for i, s := range sections {
@@ -153,7 +179,7 @@ func (sections Sections) Clone() Sections {
 	return cp
 }
 
-// Validate verifies all sections and options against injection.
+// Validate verifies all sections and their options against syntax injection.
 func (sections Sections) Validate() error {
 	for i := range sections {
 		if err := sections[i].Validate(); err != nil {
@@ -176,7 +202,7 @@ func (sections Sections) WriteTo(w io.Writer) (int64, error) {
 	return total, nil
 }
 
-// Format returns the canonical plaintext string representation of the sections.
+// Format returns the canonical plaintext string representation of all sections.
 func (sections Sections) Format() (string, error) {
 	var buf bytes.Buffer
 	_, err := sections.WriteTo(&buf)

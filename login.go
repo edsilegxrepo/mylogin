@@ -13,16 +13,39 @@ import (
 	"github.com/go-sql-driver/mysql"
 )
 
-// Login is the structured content of a section in mylogin.cnf.
+// Objective: Provide an in-memory domain model for MySQL client credentials,
+// supporting secure credential redaction, official Go MySQL driver integration,
+// structured logging telemetry, and direct connection pool instantiation.
+//
+// Core Components:
+//   - Login: Strongly typed struct representing section options (user, password, host, port, socket, Extra).
+//   - Clone / Merge: Deep-copy mechanisms providing memory isolation between goroutines.
+//   - Set / Map: Consolidated key-value accessors unifying AST parsing and CLI operations.
+//   - Zero: Defensive memory scrubber wiping passwords and sensitive byte allocations.
+//   - Connector / Open: Direct database/sql integration bypassing plaintext DSN construction.
+//   - RedactedDSN / LogValue: Telemetry protections preventing credential leakage in logs and traces.
+//
+// Functionality:
+//   - Translates raw INI key-value pairs into structured Go pointers and maps.
+//   - Maps MySQL 8.0 client parameters (ssl-mode, connect-timeout, max-allowed-packet) into *mysql.Config.
+//   - Eliminates connection string exposure by leveraging mysql.NewConnector and sql.OpenDB.
+//
+// Data Flow:
+//   Decrypted INI Stream -> parseLine -> Unescape/Unquote -> Login.Set -> Login Struct -> Driver Connector -> *sql.DB.
+
+// Login represents the structured content of an individual section in a mylogin.cnf file.
+// Pointers are used for string fields to distinguish between unset (nil) and empty ("") options.
 type Login struct {
-	User     *string           `json:"user,omitempty"`
-	Password *string           `json:"password,omitempty"`
-	Host     *string           `json:"host,omitempty"`   // TCP hostname
-	Port     *string           `json:"port,omitempty"`   // TCP port
-	Socket   *string           `json:"socket,omitempty"` // Unix socket path
-	Extra    map[string]string `json:"extra,omitempty"`  // Additional client options (e.g. database, default-auth)
+	User     *string           `json:"user,omitempty"`     // Database username
+	Password *string           `json:"password,omitempty"` // Database password (sensitive)
+	Host     *string           `json:"host,omitempty"`     // TCP hostname or IPv4/IPv6 address
+	Port     *string           `json:"port,omitempty"`     // TCP port number as string (e.g. "3306")
+	Socket   *string           `json:"socket,omitempty"`   // Unix domain socket path (e.g. "/var/run/mysqld/mysqld.sock")
+	Extra    map[string]string `json:"extra,omitempty"`    // Arbitrary additional client options (e.g. database, ssl-mode)
 }
 
+// cloneStringPtr returns a distinct heap copy of the string pointed to by s.
+// If s is nil, it returns nil.
 func cloneStringPtr(s *string) *string {
 	if s == nil {
 		return nil
@@ -31,7 +54,9 @@ func cloneStringPtr(s *string) *string {
 	return &cp
 }
 
-// Clone returns a deep copy of the Login struct.
+// Clone returns an independent, deep copy of the Login struct.
+// It deep-copies all string pointer fields and the Extra options map to prevent
+// memory aliasing and concurrent mutation races between goroutines.
 func (l *Login) Clone() *Login {
 	if l == nil {
 		return nil
@@ -52,37 +77,38 @@ func (l *Login) Clone() *Login {
 	return cp
 }
 
-// SetUser sets the user field.
+// SetUser sets the database username and returns the Login pointer for method chaining.
 func (l *Login) SetUser(user string) *Login {
 	l.User = &user
 	return l
 }
 
-// SetPassword sets the password field.
+// SetPassword sets the database password and returns the Login pointer for method chaining.
 func (l *Login) SetPassword(password string) *Login {
 	l.Password = &password
 	return l
 }
 
-// SetHost sets the TCP host field.
+// SetHost sets the TCP host address and returns the Login pointer for method chaining.
 func (l *Login) SetHost(host string) *Login {
 	l.Host = &host
 	return l
 }
 
-// SetPort sets the TCP port field.
+// SetPort sets the TCP port string and returns the Login pointer for method chaining.
 func (l *Login) SetPort(port string) *Login {
 	l.Port = &port
 	return l
 }
 
-// SetSocket sets the Unix socket path.
+// SetSocket sets the Unix domain socket path and returns the Login pointer for method chaining.
 func (l *Login) SetSocket(socket string) *Login {
 	l.Socket = &socket
 	return l
 }
 
-// SetExtra sets an arbitrary extra client option.
+// SetExtra sets an arbitrary extra client option in the Extra map.
+// It initializes the map if currently nil.
 func (l *Login) SetExtra(key, value string) *Login {
 	if l.Extra == nil {
 		l.Extra = make(map[string]string)
@@ -92,6 +118,7 @@ func (l *Login) SetExtra(key, value string) *Login {
 }
 
 // Set sets an option by key name, updating standard typed fields or placing non-standard options in Extra.
+// It returns the Login pointer to facilitate fluent configuration chaining.
 func (l *Login) Set(key, value string) *Login {
 	switch key {
 	case "user":
@@ -110,6 +137,7 @@ func (l *Login) Set(key, value string) *Login {
 }
 
 // Map returns a copy of all configured options as a key-value map.
+// Only non-nil typed fields are included, alongside all entries from the Extra map.
 func (l *Login) Map() map[string]string {
 	m := make(map[string]string)
 	if l == nil {
@@ -135,7 +163,7 @@ func (l *Login) Map() map[string]string {
 	return m
 }
 
-// IsEmpty is true if l is nil or none of the options are set.
+// IsEmpty reports true if l is nil or none of the options are set.
 func (l *Login) IsEmpty() bool {
 	return l == nil ||
 		(l.User == nil &&
@@ -152,6 +180,7 @@ func (l *Login) HasCredentials() bool {
 }
 
 // Zero securely wipes sensitive fields (specifically password) from memory.
+// It zeroes the byte array backing the password string before pointing to an empty string.
 func (l *Login) Zero() {
 	if l == nil || l.Password == nil {
 		return
@@ -183,6 +212,7 @@ func (l *Login) DSN() string {
 }
 
 // FormatDSN generates a complete and driver-compliant DSN using the official mysql driver parser.
+// If database is non-empty, it is configured as the active schema.
 func (l *Login) FormatDSN(database string) string {
 	if l.IsEmpty() {
 		if database != "" {
@@ -199,6 +229,7 @@ func (l *Login) FormatDSN(database string) string {
 
 // Config creates and initializes a *mysql.Config struct from the Login options.
 // It is nil-safe and returns an empty config if l is nil.
+// Handles socket resolution, host/port network targets, and extra option mapping.
 func (l *Login) Config() *mysql.Config {
 	cfg := mysql.NewConfig()
 	if l == nil || l.IsEmpty() {
@@ -211,6 +242,8 @@ func (l *Login) Config() *mysql.Config {
 	if l.Password != nil {
 		cfg.Passwd = *l.Password
 	}
+
+	// UNIX domain socket takes precedence over TCP network addresses
 	if l.Socket != nil {
 		cfg.Net = "unix"
 		cfg.Addr = *l.Socket
@@ -226,6 +259,8 @@ func (l *Login) Config() *mysql.Config {
 		}
 		cfg.Addr = net.JoinHostPort(host, port)
 	}
+
+	// Map extended options from Extra into official driver config fields
 	if l.Extra != nil {
 		if db, ok := l.Extra["database"]; ok {
 			cfg.DBName = db
@@ -262,6 +297,7 @@ func (l *Login) RedactedDSN() string {
 }
 
 // RedactedFormatDSN returns the connection string for database with the password masked as "******".
+// Suitable for telemetry, debug logs, and metrics dashboards where passwords must not be exposed.
 func (l *Login) RedactedFormatDSN(database string) string {
 	if l == nil || l.IsEmpty() {
 		if database != "" {
@@ -283,6 +319,7 @@ func (l *Login) String() string {
 }
 
 // LogValue implements slog.LogValuer to safely represent credentials in structured logs without leaking passwords.
+// It maps the Login into an slog.GroupValue with the password attribute masked as "******".
 func (l *Login) LogValue() slog.Value {
 	if l == nil || l.IsEmpty() {
 		return slog.GroupValue()
@@ -307,7 +344,7 @@ func (l *Login) LogValue() slog.Value {
 }
 
 // Connector returns an official database/sql driver.Connector configured with these credentials.
-// It completely avoids serializing passwords into cleartext DSN strings.
+// It completely avoids serializing passwords into cleartext DSN strings, preventing credential disclosure in driver logs.
 func (l *Login) Connector(database string) (driver.Connector, error) {
 	cfg := l.Config()
 	if database != "" {
@@ -326,6 +363,7 @@ func (l *Login) Open(database string) (*sql.DB, error) {
 	return sql.OpenDB(connector), nil
 }
 
+// unescape handles legacy MySQL escape sequences in unquoted option values.
 var unescape = strings.NewReplacer(
 	`\b`, "\b",
 	`\t`, "\t",
@@ -335,11 +373,13 @@ var unescape = strings.NewReplacer(
 	`\s`, ` `,
 ).Replace
 
+// unquote unescapes quotes and backslashes in double-quoted option values (MySQL 8.0.24+).
 var unquote = strings.NewReplacer(
 	`\"`, `"`,
 	`\\`, `\`,
 ).Replace
 
+// parseLine parses a single "key = value" or "key=value" INI line and assigns it to the Login struct.
 func (l *Login) parseLine(line string) error {
 	s := strings.SplitN(line, "=", 2)
 	if len(s) != 2 {
@@ -361,7 +401,7 @@ func (l *Login) parseLine(line string) error {
 }
 
 // Merge merges other into l: options set in other take precedence over options in l.
-// String pointers are deep-copied to prevent pointer aliasing.
+// String pointers are deep-copied to prevent pointer aliasing between the merged structures.
 func (l *Login) Merge(other *Login) {
 	if other == nil {
 		return

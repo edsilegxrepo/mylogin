@@ -1,3 +1,35 @@
+// Package mylogin_test verifies security hardening and boundary defenses.
+//
+// Objective: Rigorously validate the library's security hardening, cryptographic resilience,
+// parser robustness, injection defenses, pointer isolation, and memory-clearing guarantees.
+//
+// Core Components:
+//   - TestParseResilience: INI comment stripping, extra option capture, whitespace tolerance.
+//   - TestParseMalformedLine: Graceful error handling on lines lacking key-value separators.
+//   - TestNewKeyErrorHandling: Random byte generation failure propagation.
+//   - TestMergeDeepCopy: Elimination of pointer aliasing between merged Login structures.
+//   - TestConfigMethod: Translation fidelity from Login to *mysql.Config and roundtrip ParseDSN.
+//   - TestWriteFileHelper: Atomic encryption with 0600 mode verification.
+//   - TestFilterSectionResilience: Panic-free stream filtering with blank lines.
+//   - TestCheckPermissions: Unix file permission bitmask enforcement.
+//   - TestZeroSecurity: Key and password memory wiping.
+//   - TestNilSafety: Comprehensive nil-receiver resilience across all methods.
+//   - TestInvalidPaddingError: Detection of ciphertext corruption or bit-flipping attacks.
+//   - TestSectionWriteToAndValidation: Protection against newline and section injection attacks.
+//   - TestDSNInjectionDefense: Special character escaping in DSN credentials.
+//
+// Test Strategy:
+//   - Attack Surface Simulation: Feed malformed streams, newline-injected section names, and bit-flipped ciphertext to test defenses.
+//   - Pointer Mutation Checks: Explicitly mutate source pointers post-merge to prove independent deep copying.
+//   - Memory Zeroization Checks: Inspect byte buffers before and after Zero() invocations.
+//   - Strict Negative Assertion: Require explicit sentinel error matches for permission violations and invalid padding.
+//
+// Functionality:
+//   - Hardens all data ingress, parsing, serialization, and cryptographic boundary routines.
+//
+// Data Flow:
+//
+//	Adversarial / Corrupted Input -> Core Validation & Decryption -> Verified Safe Failure or Sanitized AST.
 package mylogin_test
 
 import (

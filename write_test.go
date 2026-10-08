@@ -1,3 +1,23 @@
+// Package mylogin_test validates cryptographic roundtrip determinism and MySQL compatibility.
+//
+// Objective: Validate complete roundtrip cryptographic fidelity and byte-for-byte binary determinism
+// against canonical MySQL 8.x testdata fixtures.
+//
+// Core Components:
+//   - TestReadWrite: Iterates over all test fixtures in testdata/ performing Decode -> Encode -> Byte Comparison.
+//
+// Test Strategy:
+//   - Exhaustive Boundary Audit: Iterate through all 16 PKCS#7 padding boundary fixtures (padding01.cnf to padding16.cnf)
+//     and diverse key configurations (0.cnf through e.cnf).
+//   - Exact Byte Equality Invariant: Require 100% byte-for-byte equality between the original fixture and the re-encoded stream.
+//   - Parallel Execution: Runs each fixture validation in parallel subtests to ensure thread safety and performance.
+//
+// Functionality:
+//   - Ensures encoding logic strictly replicates the byte formatting, IV handling, and padding of official MySQL tools.
+//
+// Data Flow:
+//
+//	Disk Fixture (.cnf) -> os.ReadFile -> Decode (Decrypt & Sniff) -> Encode (Re-encrypt & Pad) -> Byte-for-byte Assertion.
 package mylogin_test
 
 import (

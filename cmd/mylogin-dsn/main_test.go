@@ -1,3 +1,23 @@
+// Package main provides unit test coverage for the mylogin-dsn CLI tool.
+//
+// Objective: Validate the operational functionality of the mylogin-dsn CLI command binary,
+// including DSN formatting, database suffix appending, section resolution, and process exit codes.
+//
+// Core Components:
+//   - TestRunDSN: Comprehensive test covering default section, database flag, explicit section,
+//     missing sections, file errors, invalid flags, and version output.
+//
+// Test Strategy:
+//   - Direct In-Process Invocation: Calls run() directly with mocked flag arguments and captured
+//     stdout/stderr buffers to verify console output and integer exit codes.
+//   - Format Assertions: Verifies proper syntax of tcp() transports, usernames, passwords, and schema paths.
+//
+// Functionality:
+//   - Confirms correct execution flow from CLI invocation to emitted DSN strings.
+//
+// Data Flow:
+//
+//	CLI Flag Array -> run -> mylogin.ReadLogin -> FormatDSN -> stdout Buffer -> Assertions.
 package main
 
 import (

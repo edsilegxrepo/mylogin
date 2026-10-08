@@ -1,5 +1,26 @@
 // Command mylogin allows to dump the content of ~/.mylogin.cnf.
 //
+// Objective: Provide an operational command-line utility for inspecting, querying,
+// transforming, modifying, and managing MySQL login path configuration files (.mylogin.cnf).
+//
+// Core Components:
+//   - Subcommand Router: Dispatches set, remove/rm, and list/ls subcommands or falls back to dump/query.
+//   - Output Format Engine: Polymorphic formatter interface (outputFormat) supporting replay, remove, JSON, and Go templates.
+//   - Mutation Pipeline: High-level credential setters and removers using atomic Sections.WriteFile.
+//   - Filter Stream Pipeline: Low-level streaming extraction of single INI sections using FilterSection.
+//
+// Functionality:
+//   - Section Mutation: Add or update login path credentials (user, password, host, port, socket) via 'set'.
+//   - Section Deletion: Remove existing login path entries via 'remove'.
+//   - Section Enumeration: List all available section names via 'list'.
+//   - Multi-Format Dumping: Format configurations as shell replay commands, removal scripts, JSON, or custom templates.
+//   - Section Filtering: Fast streaming extraction of specific sections without parsing overhead.
+//
+// Data Flow:
+//
+//	CLI Invocation -> Argument Parsing -> Subcommand Dispatch or Format Determination ->
+//	  [Read & Decrypt .mylogin.cnf] -> [AST / Stream Transform] -> [Emit to stdout / Atomic File Write].
+//
 // # Usage
 //
 //	mylogin [-file ~/.mylogin.cnf] [-replay | -remove | -json | -template=<template> | -templateln=<template>] [<section> ...]
@@ -22,33 +43,40 @@ import (
 
 var version = "dev"
 
+// Process exit codes conforming to standard CLI design practices.
 const (
-	exitSuccess     = 0
-	exitGeneral     = 1
-	exitUsage       = 2
-	exitFileError   = 3
-	exitFormatError = 4
-	exitNotFound    = 5
+	exitSuccess     = 0 // Command completed successfully
+	exitGeneral     = 1 // General runtime or execution error
+	exitUsage       = 2 // Invalid command-line arguments or flags
+	exitFileError   = 3 // File system I/O error (not found, permission denied)
+	exitFormatError = 4 // Corrupted file, invalid key, or decryption failure
+	exitNotFound    = 5 // Requested section not found in configuration
 )
 
+// outputFormat defines the interface for polymorphic CLI output formatters.
+// It combines flag.Getter with custom printing and help descriptions.
 type outputFormat interface {
 	Help() (string, string)
 	flag.Getter
 	Print(w io.Writer, section *mylogin.Section) error
 }
 
+// outputFormatBool is a reusable flag.Getter implementation for boolean format toggles.
 type outputFormatBool struct {
 	bool
 }
 
+// IsBoolFlag informs flag.FlagSet that this flag accepts optional boolean values (-flag or -flag=true).
 func (outputFormatBool) IsBoolFlag() bool {
 	return true
 }
 
+// String returns the string representation of the boolean flag value.
 func (f *outputFormatBool) String() string {
 	return strconv.FormatBool(f.bool)
 }
 
+// Set parses a string representation into the boolean flag value.
 func (f *outputFormatBool) Set(s string) error {
 	ok, err := strconv.ParseBool(s)
 	if err != nil {
@@ -58,6 +86,7 @@ func (f *outputFormatBool) Set(s string) error {
 	return nil
 }
 
+// Get returns true if the flag was explicitly enabled, or nil if unset.
 func (f *outputFormatBool) Get() interface{} {
 	if !f.bool {
 		return nil
@@ -65,6 +94,8 @@ func (f *outputFormatBool) Get() interface{} {
 	return true
 }
 
+// formatReplay formats a configuration section into a mysql_config_editor set command.
+// Note: passwords are not exported by this format for security reasons.
 type formatReplay struct {
 	outputFormatBool
 }
@@ -73,6 +104,7 @@ func (formatReplay) Help() (string, string) {
 	return "replay", "mysql_config_editor 'set' command format (note: password is not exported)"
 }
 
+// Print outputs the shell command line representing the given section.
 func (formatReplay) Print(w io.Writer, section *mylogin.Section) error {
 	args := []string{`mysql_config_editor`, `set`, `--skip-warn`, `-G`, section.Name}
 	if section.Login.User != nil {
@@ -94,6 +126,7 @@ func (formatReplay) Print(w io.Writer, section *mylogin.Section) error {
 	return err
 }
 
+// formatRemove formats a configuration section into a mysql_config_editor remove command.
 type formatRemove struct {
 	outputFormatBool
 }
@@ -102,11 +135,14 @@ func (formatRemove) Help() (string, string) {
 	return "remove", "mysql_config_editor 'remove' command format"
 }
 
+// Print outputs the mysql_config_editor remove invocation for the given section.
 func (formatRemove) Print(w io.Writer, section *mylogin.Section) error {
 	_, err := fmt.Fprintln(w, "mysql_config_editor remove -G", section.Name)
 	return err
 }
 
+// handleFileError distinguishes between file access errors and decryption/syntax errors,
+// writing an informative message to stderr and returning the appropriate process exit code.
 func handleFileError(cmd string, err error, stderr io.Writer) int {
 	if os.IsNotExist(err) || os.IsPermission(err) {
 		fmt.Fprintf(stderr, "%s: file error: %v\n", cmd, err)
@@ -116,6 +152,7 @@ func handleFileError(cmd string, err error, stderr io.Writer) int {
 	return exitFormatError
 }
 
+// loginAsMap converts a Login instance into a generic map for JSON and template formatting.
 func loginAsMap(login *mylogin.Login) map[string]interface{} {
 	opts := login.Map()
 	m := make(map[string]interface{}, len(opts))
@@ -125,6 +162,7 @@ func loginAsMap(login *mylogin.Login) map[string]interface{} {
 	return m
 }
 
+// formatJSON emits configuration options as an indented JSON object.
 type formatJSON struct {
 	outputFormatBool
 }
@@ -133,6 +171,7 @@ func (formatJSON) Help() (string, string) {
 	return "json", "JSON format (note: section name is not exported)"
 }
 
+// Print marshals section options into pretty-printed JSON.
 func (formatJSON) Print(w io.Writer, section *mylogin.Section) error {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
@@ -140,6 +179,7 @@ func (formatJSON) Print(w io.Writer, section *mylogin.Section) error {
 	return enc.Encode(loginAsMap(&section.Login))
 }
 
+// formatTemplate executes a custom Go text/template against section options.
 type formatTemplate struct {
 	tmpl *template.Template
 }
@@ -155,6 +195,7 @@ func (f *formatTemplate) String() string {
 	return "<template>"
 }
 
+// Set compiles the user-provided template string, injecting custom template helpers.
 func (f *formatTemplate) Set(s string) error {
 	tmpl, err := template.New("user-template").Funcs(
 		template.FuncMap{
@@ -181,6 +222,7 @@ func (f *formatTemplate) Get() interface{} {
 	return f
 }
 
+// Print executes the template with a dictionary containing section options and metadata.
 func (f *formatTemplate) Print(w io.Writer, section *mylogin.Section) error {
 	m := loginAsMap(&section.Login)
 	m["section"] = section.Name
@@ -196,6 +238,7 @@ func (f *formatTemplate) Print(w io.Writer, section *mylogin.Section) error {
 	return f.tmpl.Execute(w, m)
 }
 
+// formatTemplateLn wraps formatTemplate to guarantee an appended trailing newline.
 type formatTemplateLn struct {
 	formatTemplate
 }
@@ -208,6 +251,7 @@ func (f *formatTemplateLn) Set(s string) error {
 	return f.formatTemplate.Set(s + "\n")
 }
 
+// readPassword reads a single line from the given reader for password prompts.
 func readPassword(r io.Reader) (string, error) {
 	scanner := bufio.NewScanner(r)
 	if scanner.Scan() {
@@ -219,6 +263,14 @@ func readPassword(r io.Reader) (string, error) {
 	return "", nil
 }
 
+// runSet implements the 'set' subcommand, creating or updating a login path entry.
+//
+// Workflow:
+//  1. Parse flags for target file, section name, and connection parameters.
+//  2. Resolve password from flag or interactive prompt.
+//  3. Load existing configuration file if present.
+//  4. Merge options into existing or new Section.
+//  5. Persist configuration atomically with 0600 mode using Sections.WriteFile.
 func runSet(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("mylogin set", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -309,6 +361,7 @@ func runSet(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return exitSuccess
 }
 
+// runRemove implements the 'remove' subcommand, deleting a login path entry from the file.
 func runRemove(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("mylogin remove", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -352,6 +405,7 @@ func runRemove(args []string, stdout, stderr io.Writer) int {
 	return exitSuccess
 }
 
+// runList implements the 'list' subcommand, outputting all login path names present in the file.
 func runList(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("mylogin list", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -376,10 +430,19 @@ func runList(args []string, stdout, stderr io.Writer) int {
 	return exitSuccess
 }
 
+// run dispatches command execution using os.Stdin as default input stream.
 func run(args []string, stdout, stderr io.Writer) int {
 	return runWithStdin(args, os.Stdin, stdout, stderr)
 }
 
+// runWithStdin parses CLI subcommands, options, and handles file extraction and formatting.
+//
+// Execution Flow:
+//  1. Check for subcommands ("set", "remove"/"rm", "list"/"ls") and dispatch to handler.
+//  2. If no subcommand, parse general flags (-file, -version, format flags).
+//  3. Validate format mutual exclusion (only one formatter allowed per invocation).
+//  4. If format selected: load target sections and render using selected formatter.
+//  5. If no format selected: decrypt stream and emit raw INI or stream-filter single section.
 func runWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) > 0 {
 		switch args[0] {

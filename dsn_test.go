@@ -1,3 +1,22 @@
+// Package mylogin_test validates MySQL Data Source Name (DSN) formatting and driver parsing.
+//
+// Objective: Validate that Login.DSN() outputs valid Data Source Names (DSN) compliant with
+// go-sql-driver/mysql specifications and confirm roundtrip parser fidelity.
+//
+// Core Components:
+//   - TestDSN: Tests formatting of user, password, host, and port into standard DSN syntax.
+//   - stringPtr: Utility converting a string value to a heap pointer.
+//
+// Test Strategy:
+//   - Driver Roundtrip Invariant: Format credentials via Login.DSN(), parse the result using
+//     the official mysql.ParseDSN, re-format using cfg.FormatDSN(), and assert exact string equality.
+//
+// Functionality:
+//   - Validates seamless interoperability between mylogin credential objects and the go-sql-driver/mysql driver.
+//
+// Data Flow:
+//
+//	Login Struct -> Login.DSN() -> mysql.ParseDSN() -> cfg.FormatDSN() -> Equality Assertion.
 package mylogin_test
 
 import (

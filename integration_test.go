@@ -1,6 +1,34 @@
 //go:build integration
 // +build integration
 
+// Package mylogin_test executes live end-to-end integration tests against real MySQL servers.
+//
+// Objective: Comprehensive end-to-end integration test suite validating real database connectivity,
+// live credential decryption, CRUD operations, transactions, official MySQL CLI (mysql and
+// mysql_config_editor) interoperability, and compiled CLI binaries against an unmocked, running MySQL 8.x instance.
+//
+// Core Components:
+//   - liveServer: Container holding ephemeral socket/TCP connection endpoints and credentials.
+//   - setupLiveMySQL: Three-tier server provisioner (MYSQL_INTEGRATION_DSN -> local mysqld -> Docker container).
+//   - TestLiveEndToEndWorkflow: Full lifecycle test including DDL/DML, transactions, official tool interoperability, and section merging.
+//   - TestLiveCLIToolsWorkflow: Compiles and executes mylogin, mylogin-dsn, and mylogin-key binaries against live database endpoints.
+//
+// Test Strategy:
+//   - Unmocked Real-World Simulation: Connect directly to live mysqld processes using TCP and Unix sockets
+//     with caching_sha2_password authentication.
+//   - Bidirectional Interoperability: Verify that official MySQL tools (mysql, mysql_config_editor) read
+//     and write Go-generated .mylogin.cnf files without warning or error.
+//   - Transactional Integrity: Execute multi-row inserts inside transactions with commit and rollback verification.
+//   - Automatic Lifecycle Containment: Uses temporary directories, dynamic unallocated ports, and graceful
+//     SIGINT process cleanup handlers.
+//
+// Functionality:
+//   - Proves production readiness and 100% interoperability with the official MySQL 8.x ecosystem.
+//
+// Data Flow:
+//
+//	Launch mysqld -> Write .mylogin.cnf via mylogin.WriteFile -> Connect via Login.Open & DSN ->
+//	  Execute SQL (DDL, DML, Tx) -> Invoke Official MySQL CLI -> Compile & Test Go CLI Tools.
 package mylogin_test
 
 import (

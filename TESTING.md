@@ -204,12 +204,12 @@ Below is the complete inventory of all test functions, their logical grouping, t
 ### 6.1 Statement Coverage by Package
 
 ```
-ok      github.com/edsilegxrepo/mylogin             coverage: 92.9% of statements
+ok      github.com/edsilegxrepo/mylogin             coverage: 93.0% of statements
 ok      github.com/edsilegxrepo/mylogin/cmd/mylogin         coverage: 95.9% of statements
 ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-dsn     coverage: 92.7% of statements
 ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-key     coverage: 92.8% of statements
 ---------------------------------------------------------------------------------------
-TOTAL MODULE COVERAGE:                              94.2% of statements
+TOTAL MODULE COVERAGE:                              94.3% of statements
 THRESHOLD REQUIREMENT:                              >= 80.0% (PASSED)
 ```
 
@@ -223,7 +223,7 @@ THRESHOLD REQUIREMENT:                              >= 80.0% (PASSED)
 | `mylogin` | [`login.go`](./login.go) | `DSN` | **91.7%** |
 | `mylogin` | [`login.go`](./login.go) | `LogValue` | **92.9%** |
 | `mylogin` | [`login.go`](./login.go) | `Open` | **75.0%** |
-| `mylogin` | [`login.go`](./login.go) | `parseLine` | **95.2%** |
+| `mylogin` | [`login.go`](./login.go) | `parseLine` | **100.0%** |
 | `mylogin` | [`login.go`](./login.go) | `Merge` | **100.0%** |
 | `mylogin` | [`mylogin.go`](./mylogin.go) | `NewKey`, `DefaultFile`, `CheckPermissions`, `Default`, `Get`, `Load` | **100.0%** |
 | `mylogin` | [`mylogin.go`](./mylogin.go) | `Parse`, `NewFile`, `Key`, `ByteOrder`, `PlainText` | **100.0%** |
