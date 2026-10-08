@@ -11,7 +11,8 @@ The `github.com/edsilegxrepo/mylogin` module is an enterprise-grade Go library a
 To maintain a single source of truth without content duplication, detailed architectural models and test specifications reside in dedicated documentation files:
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md): Authoritative specification for system architecture, AES-128-CBC mechanics, AST parsing, concurrency guarantees, security threat models, and package dependencies.
-- [TESTING.md](./TESTING.md): Authoritative specification for test suite architecture, logic flows, master test inventory, live MySQL daemon provisioning, and statement coverage metrics (94.3%).
+- [TESTING.md](./TESTING.md): Authoritative specification for test suite architecture, logic flows, master test inventory, live MySQL daemon provisioning, and statement coverage metrics (94.7%).
+- [CHANGELOG.md](./CHANGELOG.md): Complete release history, migration notes, and change provenance reconstructed since the initial fork.
 
 ---
 
@@ -343,3 +344,4 @@ go install github.com/edsilegxrepo/mylogin/cmd/mylogin-key@latest
 - Original work Copyright 2016-2018 Olivier Mengué.
 - Modernized and hardened fork Copyright 2026 Critical Systems.
 - Licensed under the MIT License. See [LICENSE](./LICENSE) for details.
+- For complete release history, migration notes, and change provenance, see [CHANGELOG.md](./CHANGELOG.md).
