@@ -118,7 +118,9 @@ sequenceDiagram
 | Variable Name | Default Value | Description |
 | :--- | :--- | :--- |
 | `MYSQL_INTEGRATION_DSN` | *(empty)* | Optional DSN of an existing MySQL server (e.g. `root:pass@tcp(127.0.0.1:3306)/`). If set, integration tests skip spawning local `mysqld` or Docker. |
-| `MYSQL_TEST_OPTION_FILE` | *(empty)* | Optional filesystem path overriding the default plaintext MySQL option file (`~/.my.cnf` or `%APPDATA%\MySQL\.my.cnf`). |
+| `MYSQL_GLOBAL_OPTION_FILE` | *(empty)* | Optional filesystem path overriding the default canonical global MySQL option file (`/etc/my.cnf` or `%WINDIR%\my.ini`). |
+| `MYSQL_OPTION_FILE` | *(empty)* | Optional filesystem path overriding the default user plaintext MySQL option file (`~/.my.cnf` or `%APPDATA%\MySQL\.my.cnf`). |
+| `MYSQL_TEST_OPTION_FILE` | *(empty)* | Hermetic test override bypassing global option file discovery and specifying an exact test option file path. |
 | `MYSQL_TEST_LOGIN_FILE` | *(empty)* | Optional filesystem path overriding the default encrypted `.mylogin.cnf` location. |
 | `GO` | `go` | Path to the Go binary in the host environment. |
 | `GO_OPTS` | `-trimpath -buildmode=pie` | Compiler flags for reproducible and hardened Position Independent Executable builds. |
@@ -187,6 +189,9 @@ Below is the complete inventory of all test functions, their logical grouping, t
 | **Model & Options** | [`TestLoginSetAndMap`](./coverage_test.go#L456) | Validates dynamic option assignment with Set() and map projection via Map(). | Successfully sets and maps all options and handles nil receivers. |
 | **Model & Options** | [`TestConfigMethod`](./hardened_test.go#L170) | Validates generation of official `*mysql.Config` from `Login`. | Correctly translates user, password, address, and socket parameters. |
 | **Model & Options** | [`TestExtendedConfigOptionMapping`](./coverage_test.go#L373) | Tests mapping of `ssl-mode`, `connect-timeout`, and `max-allowed-packet`. | Correctly maps TLSConfig (`DISABLED`, `REQUIRED`, etc.) and timeout durations. |
+| **Model & Options** | [`TestConfigProtocolAndSocketHijackingPrevention`](./login_test.go#L110) | Validates protocol=socket enforcement and socket hijacking prevention when remote host is specified. | Prevents local socket from hijacking remote TCP host unless protocol=socket or host=localhost. |
+| **Model & Options** | [`TestConfigExpandedProperties`](./login_test.go#L150) | Tests expanded driver configuration: timeouts, collation vs charset, and session pragmas. | Correctly maps read/write timeouts, charset collations, and session pragmas into mysql.Config. |
+| **Model & Options** | [`TestConfigExpandedProperties_FullMatrix`](./login_test.go#L150) | Exhaustively tests collation matrices, timezone location loading, boolean flags, and invalid numeric fallback. | Verifies all character set to collation mappings and graceful invalid value defaults. |
 | **Model & Options** | [`TestNilSafety`](./hardened_test.go#L288) | Calls all public methods on `(*Login)(nil)`. | All methods return default values or empty configs without panicking. |
 | **Model & Options** | [`TestSectionWriteToAndValidation`](./hardened_test.go#L339) | Tests section formatting, option escaping, and validation checks. | Correctly formats INI syntax and escapes quote literals. |
 | **Driver Integration** | [`TestLoginConnectorAndOpen`](./coverage_test.go#L349) | Verifies `Login.Connector()` and `Login.Open()` constructing database handles. | Returns valid `driver.Connector` and `*sql.DB` without constructing plaintext DSNs. |
@@ -195,11 +200,16 @@ Below is the complete inventory of all test functions, their logical grouping, t
 | **Driver Integration & TLS** | [`TestApplyTLS_Modes`](./login_tls_internal_test.go#L130) | Tests all MySQL `ssl-mode` transitions (`DISABLED`, `REQUIRED`, `VERIFY_CA`, `VERIFY_IDENTITY`). | Configures appropriate TLS flags, skips or validates CA roots, and registers configs. |
 | **Driver Integration & TLS** | [`TestApplyTLS_ErrorBranches`](./login_tls_internal_test.go#L230) | Tests error handling on missing cert/key pairs and non-existent CA files. | Returns explicit error descriptions without panicking. |
 | **Driver Integration & TLS** | [`TestVerifyPeerCertificateAgainstRoots`](./login_tls_internal_test.go#L290) | Validates custom peer certificate chain verification without hostname restriction. | Accepts CA-signed certs; rejects corrupted bytes, empty lists, and untrusted certs. |
+| **Driver Integration & TLS** | [`TestApplyTLS_ExtendedOptions`](./login_tls_internal_test.go#L360) | Validates extended TLS controls (tls-version, ssl-capath, ssl-cipher, ssl-verify-server-cert). | Successfully applies and caches custom TLS configurations and directory trust pools. |
 | **Plaintext Option Cascade** | [`TestReadClientDefaultsMissingFileIgnored`](./clientdefaults_test.go#L12) | Validates graceful handling when plaintext `.my.cnf` option file is absent. | Returns empty `Login` struct with `nil` error. |
 | **Plaintext Option Cascade** | [`TestDefaultOptionFileEnvVar`](./clientdefaults_test.go#L23) | Validates path resolution via `MYSQL_TEST_OPTION_FILE` and platform fallbacks. | Returns custom override when set; defaults to canonical OS option path. |
 | **Plaintext Option Cascade** | [`TestDefaultClientDefaults`](./clientdefaults_test.go#L39) | Validates parsing of default plaintext option file `[client]` section. | Successfully populates host, user, and extra options. |
 | **Plaintext Option Cascade** | [`TestReadClientDefaultsEdgeCases`](./clientdefaults_test.go#L60) | Validates malformed syntax rejection and handling of files lacking `[client]`. | Returns parse error on malformed INI lines; returns empty login on missing `[client]`. |
 | **Plaintext Option Cascade** | [`TestReadResolvedLoginPrecedence`](./clientdefaults_test.go#L88) | Tests 3-tier precedence: `.my.cnf` [client] ➔ `.mylogin.cnf` [client] ➔ section. | Correctly applies cascading overrides across all configuration tiers. |
+| **Plaintext Option Cascade** | [`TestParseOptionDirectivesAndBareFlags`](./clientdefaults_test.go#L180) | Validates parsing tolerance for !include/!includedir directives and bare boolean flags (compress, quick). | Safely skips directives; normalizes keys and parses bare flags as boolean true. |
+| **Plaintext Option Cascade** | [`Test4TierCascadePrecedence`](./clientdefaults_test.go#L210) | Tests 4-tier precedence: global file ➔ user file ➔ .mylogin.cnf [client] ➔ target section. | Correctly cascades settings across all 4 tiers adhering to MySQL precedence. |
+| **Plaintext Option Cascade** | [`TestGlobalOptionFiles_EnvOverrides`](./clientdefaults_test.go#L260) | Validates global option file discovery and MYSQL_GLOBAL_OPTION_FILE / MYSQL_OPTION_FILE overrides. | Returns custom paths when set; enforces hermetic isolation under MYSQL_TEST_OPTION_FILE. |
+| **Plaintext Option Cascade** | [`TestReadClientDefaultsHierarchy_EdgeCases`](./clientdefaults_test.go#L430) | Validates empty slice handling and non-existent file resilience in multi-file cascade. | Gracefully returns empty Login with nil error without panics. |
 | **Plaintext Option Cascade** | [`TestReadResolvedLoginErrors`](./clientdefaults_test.go#L130) | Tests error propagation when option file or mylogin file fails to parse. | Propagates error up the stack without masking. |
 | **Plaintext Option Cascade** | [`TestTopLevelDefaultAndGetWithOptionFile`](./clientdefaults_test.go#L150) | Tests top-level `mylogin.Default()` and `mylogin.Get()` incorporating option file. | Successfully resolves cascading client options through the high-level API. |
 | **Platform: Windows** | [`TestPlatformDefaultOptionFile_Windows`](./defaultoptionfile_windows_test.go#L11) | Verifies `%APPDATA%\MySQL\.my.cnf` resolution and roaming profile fallback on Windows. | Successfully constructs Windows path and handles unset APPDATA. |
@@ -230,14 +240,14 @@ Below is the complete inventory of all test functions, their logical grouping, t
 ### 6.1 Statement Coverage by Package
 
 ```
-ok      github.com/edsilegxrepo/mylogin             coverage: 93.3% of statements
-ok      github.com/edsilegxrepo/mylogin/cmd/mylogin         coverage: 95.3% of statements
-ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-connect coverage: 81.0% of statements
-ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-dsn     coverage: 92.3% of statements
-ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-inspect coverage: 96.6% of statements
-ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-key     coverage: 92.5% of statements
+ok      github.com/edsilegxrepo/mylogin             coverage: 94.1% of statements
+ok      github.com/edsilegxrepo/mylogin/cmd/mylogin         coverage: 90.7% of statements
+ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-connect coverage: 77.5% of statements
+ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-dsn     coverage: 91.1% of statements
+ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-inspect coverage: 95.8% of statements
+ok      github.com/edsilegxrepo/mylogin/cmd/mylogin-key     coverage: 90.9% of statements
 ---------------------------------------------------------------------------------------
-TOTAL MODULE COVERAGE:                              93.5% of statements
+TOTAL MODULE COVERAGE:                              93.2% of statements
 THRESHOLD REQUIREMENT:                              >= 80.0% (PASSED)
 ```
 
@@ -253,11 +263,11 @@ THRESHOLD REQUIREMENT:                              >= 80.0% (PASSED)
 | `mylogin` | [`login.go`](./login.go) | `Open` | **100.0%** |
 | `mylogin` | [`login.go`](./login.go) | `parseLine` | **100.0%** |
 | `mylogin` | [`login.go`](./login.go) | `Merge` | **100.0%** |
-| `mylogin` | [`clientdefaults.go`](./clientdefaults.go) | `DefaultOptionFile`, `DefaultClientDefaults`, `ReadClientDefaults` | **92.9% - 100.0%** |
+| `mylogin` | [`clientdefaults.go`](./clientdefaults.go) | `DefaultOptionFile`, `DefaultClientDefaults`, `ReadClientDefaults`, `GlobalOptionFiles`, `DefaultOptionFiles`, `ReadClientDefaultsHierarchy` | **92.9% - 100.0%** |
 | `mylogin` | [`defaultfile.go`](./defaultfile.go) | `platformDefaultFile` | **100.0%** |
 | `mylogin` | [`defaultoptionfile_windows.go`](./defaultoptionfile_windows.go) | `platformDefaultOptionFile` | **83.3%** |
 | `mylogin` | [`login_tls.go`](./login_tls.go) | `configWithTLS`, `applyTLS`, `loadRootCAs`, `verifyPeerCertificateAgainstRoots` | **92.9% - 100.0%** |
-| `mylogin` | [`mylogin.go`](./mylogin.go) | `NewKey`, `DefaultFile`, `CheckPermissions`, `Default`, `Get`, `Load`, `ReadResolvedLogin` | **75.0% - 100.0%** |
+| `mylogin` | [`mylogin.go`](./mylogin.go) | `NewKey`, `DefaultFile`, `CheckPermissions`, `Default`, `Get`, `Load`, `ReadResolvedLogin`, `ReadResolvedLoginHierarchy` | **75.0% - 100.0%** |
 | `mylogin` | [`mylogin.go`](./mylogin.go) | `Parse`, `NewFile`, `Key`, `ByteOrder`, `PlainText` | **100.0%** |
 | `mylogin` | [`mylogin.go`](./mylogin.go) | `Decode` | **88.9%** |
 | `mylogin` | [`mylogin.go`](./mylogin.go) | `Encode` | **89.2%** |

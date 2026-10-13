@@ -443,3 +443,258 @@ func TestLoginConnector_TLSIntegration(t *testing.T) {
 		t.Fatal("expected Connector to fail on invalid TLS settings")
 	}
 }
+
+func TestApplyTLS_ExtendedOptions(t *testing.T) {
+	tmpDir := t.TempDir()
+	caPEMFile, _, _, _, _, _ := generateTestPKI(t, tmpDir)
+
+	// Copy CA PEM into a capath directory
+	caDir := filepath.Join(tmpDir, "capath")
+	if err := os.MkdirAll(caDir, 0o755); err != nil {
+		t.Fatalf("failed to create capath dir: %v", err)
+	}
+	caData, err := os.ReadFile(caPEMFile)
+	if err != nil {
+		t.Fatalf("failed to read caPEM: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(caDir, "server-ca.crt"), caData, 0o600); err != nil {
+		t.Fatalf("failed to write ca to dir: %v", err)
+	}
+
+	// 1. Test ssl-verify-server-cert without ssl-mode defaults to VERIFY_IDENTITY
+	loginVerify := &Login{
+		Extra: map[string]string{
+			"ssl-verify-server-cert": "true",
+			"ssl-capath":             caDir,
+			"tls-version":            "TLSv1.2,TLSv1.3",
+			"ssl-cipher":             "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384",
+		},
+	}
+	cfg := mysql.NewConfig()
+	if err := loginVerify.applyTLS(cfg); err != nil {
+		t.Fatalf("applyTLS failed: %v", err)
+	}
+	if !strings.HasPrefix(cfg.TLSConfig, "mylogin_tls_") {
+		t.Errorf("expected registered TLS profile name, got %q", cfg.TLSConfig)
+	}
+
+	// 2. Test parseTLSVersion across all supported versions and fallback
+	if parseTLSVersion("TLSv1") != tls.VersionTLS10 || parseTLSVersion("TLSv1.0") != tls.VersionTLS10 {
+		t.Errorf("expected VersionTLS10")
+	}
+	if parseTLSVersion("TLSv1.1") != tls.VersionTLS11 {
+		t.Errorf("expected VersionTLS11")
+	}
+	if parseTLSVersion("TLSv1.2") != tls.VersionTLS12 {
+		t.Errorf("expected VersionTLS12")
+	}
+	if parseTLSVersion("TLSv1.3") != tls.VersionTLS13 {
+		t.Errorf("expected VersionTLS13")
+	}
+	if parseTLSVersion("invalid_tls_99") != 0 {
+		t.Errorf("expected 0 for invalid TLS version")
+	}
+
+	// 3. Test parseCipherSuites with various delimiters, empty string, and unknowns
+	if parseCipherSuites("") != nil {
+		t.Errorf("expected nil for empty cipher string")
+	}
+	ciphers := parseCipherSuites("TLS_AES_128_GCM_SHA256,TLS_AES_256_GCM_SHA384 TLS_CHACHA20_POLY1305_SHA256:NONEXISTENT_CIPHER")
+	if len(ciphers) != 3 {
+		t.Errorf("expected 3 parsed cipher suites, got %d", len(ciphers))
+	}
+
+	// 4. Test loadRootCAPool with both caPath and caDir specified
+	pool, err := loadRootCAPool(caPEMFile, caDir)
+	if err != nil || pool == nil {
+		t.Fatalf("expected successful pool loading with both caPath and caDir: %v", err)
+	}
+
+	// 5. Test loadRootCADir edge cases: empty directory, missing directory, directory with ignored files
+	emptyDir := filepath.Join(tmpDir, "empty_cadir")
+	_ = os.MkdirAll(emptyDir, 0o755)
+	if _, err := loadRootCADir(emptyDir); err == nil {
+		t.Error("expected error for empty ca directory")
+	}
+
+	missingDir := filepath.Join(tmpDir, "missing_cadir")
+	if _, err := loadRootCADir(missingDir); err == nil {
+		t.Error("expected error for missing ca directory")
+	}
+
+	// Add sub-directory and non-cert file to caDir to verify skipping logic
+	_ = os.MkdirAll(filepath.Join(caDir, "sub_ignored"), 0o755)
+	_ = os.WriteFile(filepath.Join(caDir, "notes.txt"), []byte("not a cert"), 0o600)
+	poolFiltered, err := loadRootCADir(caDir)
+	if err != nil || poolFiltered == nil {
+		t.Errorf("expected successful load ignoring non-certs and subdirs: %v", err)
+	}
+}
+
+func TestParseTLSVersion_QuotedAndEdgeCases(t *testing.T) {
+	cases := []struct {
+		input    string
+		expected uint16
+	}{
+		{`"TLSv1.2"`, tls.VersionTLS12},
+		{`'TLSv1.3'`, tls.VersionTLS13},
+		{`  "TLSv1.1"  `, tls.VersionTLS11},
+		{`'TLSv1.0'`, tls.VersionTLS10},
+		{`'TLSv1'`, tls.VersionTLS10},
+		{`""`, 0},
+		{`"`, 0},
+		{`'`, 0},
+		{`"UNKNOWN"`, 0},
+	}
+
+	for _, tc := range cases {
+		got := parseTLSVersion(tc.input)
+		if got != tc.expected {
+			t.Errorf("parseTLSVersion(%q) = %d; expected %d", tc.input, got, tc.expected)
+		}
+	}
+}
+
+func TestParseCipherSuites_LegacyAndInsecure(t *testing.T) {
+	// Insecure cipher suites (e.g. TLS_RSA_WITH_AES_128_CBC_SHA) should be parsed successfully
+	insecureCipher := "TLS_RSA_WITH_AES_128_CBC_SHA"
+	parsed := parseCipherSuites(insecureCipher)
+	if len(parsed) != 1 {
+		t.Fatalf("expected 1 parsed insecure cipher suite, got %d", len(parsed))
+	}
+	if parsed[0] != tls.TLS_RSA_WITH_AES_128_CBC_SHA {
+		t.Errorf("expected TLS_RSA_WITH_AES_128_CBC_SHA (0x%04x), got 0x%04x", tls.TLS_RSA_WITH_AES_128_CBC_SHA, parsed[0])
+	}
+
+	// Without TLS_ prefix
+	noPrefix := "RSA_WITH_AES_128_CBC_SHA"
+	parsedNoPrefix := parseCipherSuites(noPrefix)
+	if len(parsedNoPrefix) != 1 || parsedNoPrefix[0] != tls.TLS_RSA_WITH_AES_128_CBC_SHA {
+		t.Errorf("expected resolution of cipher without TLS_ prefix: got %v", parsedNoPrefix)
+	}
+
+	// Mixed list of modern secure and legacy insecure ciphers
+	mixed := "TLS_AES_128_GCM_SHA256:TLS_RSA_WITH_AES_128_CBC_SHA,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+	parsedMixed := parseCipherSuites(mixed)
+	if len(parsedMixed) != 3 {
+		t.Errorf("expected 3 ciphers parsed from mixed list, got %d", len(parsedMixed))
+	}
+}
+
+func TestLoadPEMsFromDir_OpenSSLHashSymlinksAndCertTypes(t *testing.T) {
+	tmpDir := t.TempDir()
+	caPEMFile, _, _, _, _, _ := generateTestPKI(t, tmpDir)
+	caData, err := os.ReadFile(caPEMFile)
+	if err != nil {
+		t.Fatalf("read ca file: %v", err)
+	}
+
+	testDir := filepath.Join(tmpDir, "hash_test_cadir")
+	if err := os.MkdirAll(testDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// 1. Write standard extensions: .pem, .crt, .cer
+	if err := os.WriteFile(filepath.Join(testDir, "root.pem"), caData, 0o600); err != nil {
+		t.Fatalf("write root.pem: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(testDir, "intermediate.crt"), caData, 0o600); err != nil {
+		t.Fatalf("write intermediate.crt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(testDir, "ca.cer"), caData, 0o600); err != nil {
+		t.Fatalf("write ca.cer: %v", err)
+	}
+
+	// 2. Write OpenSSL c_rehash numeric hash extension format: e.g. ed524cf5.0, 5a42095d.1
+	if err := os.WriteFile(filepath.Join(testDir, "ed524cf5.0"), caData, 0o600); err != nil {
+		t.Fatalf("write hash.0: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(testDir, "5a42095d.1"), caData, 0o600); err != nil {
+		t.Fatalf("write hash.1: %v", err)
+	}
+
+	// 3. Write non-cert files that should be ignored: .txt, .bak, .0invalid, invalid.0a
+	if err := os.WriteFile(filepath.Join(testDir, "ignore.txt"), []byte("text"), 0o600); err != nil {
+		t.Fatalf("write ignore.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(testDir, "backup.bak"), []byte("bak"), 0o600); err != nil {
+		t.Fatalf("write backup.bak: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(testDir, "file.0a"), caData, 0o600); err != nil {
+		t.Fatalf("write file.0a: %v", err)
+	}
+
+	// Verify isCertFile helper
+	if !isCertFile("cert.pem") || !isCertFile("cert.crt") || !isCertFile("cert.cer") {
+		t.Error("expected isCertFile=true for standard extensions")
+	}
+	if !isCertFile("hash.0") || !isCertFile("hash.12") {
+		t.Error("expected isCertFile=true for OpenSSL numeric hash extensions")
+	}
+	if isCertFile("file.txt") || isCertFile("file.bak") || isCertFile("file.0a") || isCertFile("file.") || isCertFile("file") {
+		t.Error("expected isCertFile=false for non-cert extensions")
+	}
+
+	// Load directory
+	pool := x509.NewCertPool()
+	loaded, err := loadPEMsFromDir(testDir, pool)
+	if err != nil {
+		t.Fatalf("loadPEMsFromDir failed: %v", err)
+	}
+	// 5 valid cert files (.pem, .crt, .cer, .0, .1)
+	if loaded != 5 {
+		t.Errorf("expected 5 certificates loaded, got %d", loaded)
+	}
+
+	// loadRootCADir should succeed
+	caDirPool, err := loadRootCADir(testDir)
+	if err != nil || caDirPool == nil {
+		t.Fatalf("loadRootCADir failed on hash directory: %v", err)
+	}
+}
+
+func TestApplyTLS_SkipSSLAndExplicitSSL(t *testing.T) {
+	// 1. skip-ssl explicitly disables TLS
+	lSkip := &Login{
+		Extra: map[string]string{
+			"skip-ssl": "true",
+			"ssl-ca":   "/some/dummy/ca.pem",
+		},
+	}
+	cfgSkip := mysql.NewConfig()
+	if err := lSkip.applyTLS(cfgSkip); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfgSkip.TLSConfig != "false" {
+		t.Errorf("expected TLSConfig='false' with skip-ssl, got %q", cfgSkip.TLSConfig)
+	}
+
+	// 2. ssl = 0 explicitly disables TLS
+	lSSL0 := &Login{
+		Extra: map[string]string{
+			"ssl":    "0",
+			"ssl-ca": "/some/dummy/ca.pem",
+		},
+	}
+	cfg0 := mysql.NewConfig()
+	if err := lSSL0.applyTLS(cfg0); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg0.TLSConfig != "false" {
+		t.Errorf("expected TLSConfig='false' with ssl=0, got %q", cfg0.TLSConfig)
+	}
+
+	// 3. ssl = 1 enables TLS (REQUIRED mode)
+	lSSL1 := &Login{
+		Extra: map[string]string{
+			"ssl": "1",
+		},
+	}
+	cfg1 := mysql.NewConfig()
+	if err := lSSL1.applyTLS(cfg1); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.HasPrefix(cfg1.TLSConfig, "mylogin_tls_") {
+		t.Errorf("expected registered TLS profile with ssl=1, got %q", cfg1.TLSConfig)
+	}
+}

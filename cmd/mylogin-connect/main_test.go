@@ -21,6 +21,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -115,5 +116,45 @@ func TestRunConnect(t *testing.T) {
 	code = run([]string{"-file", envConf, "-dry-run"}, &stdout, &stderr)
 	if code != exitSuccess || !strings.Contains(stdout.String(), "source configuration valid") {
 		t.Errorf("expected success with env var defaults, got %d: %s", code, stderr.String())
+	}
+
+	// 9. Cascade with -option-file and -global-option-file in dry-run mode
+	optPath := filepath.Join(tempDir, "user.cnf")
+	globalOptPath := filepath.Join(tempDir, "global.cnf")
+	_ = os.WriteFile(globalOptPath, []byte("[client]\nconnect-timeout = 5\n"), 0o600)
+	_ = os.WriteFile(optPath, []byte("[client]\nread-timeout = 10\n"), 0o600)
+
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{
+		"-file", confPath,
+		"-option-file", optPath,
+		"-global-option-file", globalOptPath,
+		"-source", "source_sec",
+		"-target", "target_sec",
+		"-dry-run",
+	}, &stdout, &stderr)
+	if code != exitSuccess {
+		t.Errorf("expected exitSuccess with cascade flags, got %d, stderr: %s", code, stderr.String())
+	}
+
+	// 10. Target live ping error on unreachable port
+	unreachableTgtConf := filepath.Join(tempDir, "unreachable_tgt.cnf")
+	_ = mylogin.WriteFile(unreachableTgtConf, strings.NewReader("[src_ok]\n[unreachable_tgt]\nhost = \"127.0.0.1\"\nport = 1\n"))
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"-file", unreachableTgtConf, "-source", "src_ok", "-target", "unreachable_tgt"}, &stdout, &stderr)
+	if code != exitError {
+		t.Errorf("expected exitError on unreachable target ping, got %d", code)
+	}
+
+	// 11. Malformed option file error
+	malformedOpt := filepath.Join(tempDir, "malformed.cnf")
+	_ = os.WriteFile(malformedOpt, []byte("[client]\ninvalid_line_without_equals\n"), 0o600)
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"-file", confPath, "-option-file", malformedOpt, "-dry-run"}, &stdout, &stderr)
+	if code != exitError {
+		t.Errorf("expected exitError for malformed option file, got %d", code)
 	}
 }

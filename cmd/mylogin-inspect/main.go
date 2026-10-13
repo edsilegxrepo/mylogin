@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 
 	mylogin "github.com/edsilegxrepo/mylogin"
 )
@@ -41,6 +42,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	filePath := flags.String("file", mylogin.DefaultFile(), "Path to .mylogin.cnf file")
 	optionPath := flags.String("option-file", mylogin.DefaultOptionFile(), "Path to plaintext .my.cnf option file")
+	globalOptionPath := flags.String("global-option-file", "", "Path to global MySQL option file (e.g. /etc/my.cnf or /etc/my-client.cnf)")
 	showVersion := flags.Bool("version", false, "Print version information and exit")
 
 	if err := flags.Parse(args); err != nil {
@@ -59,9 +61,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 		targetSection = env
 	}
 
-	printFmt(stdout, "default option file: %s\n", *optionPath)
+	var optionFiles []string
+	if *globalOptionPath != "" {
+		optionFiles = append(optionFiles, *globalOptionPath)
+	} else {
+		optionFiles = append(optionFiles, mylogin.GlobalOptionFiles()...)
+	}
+	if *optionPath != "" {
+		optionFiles = append(optionFiles, *optionPath)
+	}
 
-	login, err := mylogin.ReadResolvedLogin(*filePath, *optionPath, []string{mylogin.DefaultSection, targetSection})
+	printFmt(stdout, "default option file: %s\n", *optionPath)
+	if len(optionFiles) > 1 || (len(optionFiles) == 1 && optionFiles[0] != *optionPath) {
+		printFmt(stdout, "cascade option files: %s\n", strings.Join(optionFiles, ", "))
+	}
+
+	login, err := mylogin.ReadResolvedLoginHierarchy(*filePath, optionFiles, []string{mylogin.DefaultSection, targetSection})
 	if err != nil {
 		printFmt(stderr, "Get failed: %v\n", err)
 		return exitError

@@ -22,6 +22,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -89,5 +90,20 @@ func TestRunDSN(t *testing.T) {
 	code = run([]string{"-version"}, &stdout, &stderr)
 	if code != exitSuccess || !strings.Contains(stdout.String(), "mylogin-dsn version") {
 		t.Fatalf("expected version output, got code %d, stdout: %s", code, stdout.String())
+	}
+
+	// 7. Option file cascading into DSN
+	optPath := filepath.Join(tempDir, "client.cnf")
+	if err := os.WriteFile(optPath, []byte("[client]\nhost = \"localhost\"\nport = 3309\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile client.cnf: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"-file", confPath, "-option-file", optPath, "analytics"}, &stdout, &stderr)
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess with -option-file, got %d, stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "tcp(localhost:3309)/") {
+		t.Errorf("expected port 3309 in DSN, got %s", stdout.String())
 	}
 }

@@ -36,3 +36,24 @@ func platformDefaultOptionFile() string {
 	// 3. Environment expansion fallback
 	return os.ExpandEnv(`${APPDATA}\MySQL\.my.cnf`)
 }
+
+// platformGlobalOptionCandidates returns candidate filesystem paths for system-wide MySQL option files
+// on Windows operating systems in canonical lookup order.
+func platformGlobalOptionCandidates() []string {
+	var candidates []string
+	if programData := os.Getenv("ProgramData"); programData != "" {
+		candidates = append(candidates,
+			filepath.Join(programData, "MySQL", "MySQL Server 8.0", "my.ini"),
+			filepath.Join(programData, "MySQL", "MySQL Server 8.4", "my.ini"),
+			filepath.Join(programData, "MySQL", "my.ini"),
+		)
+	}
+	if winDir := os.Getenv("WINDIR"); winDir != "" {
+		candidates = append(candidates,
+			filepath.Join(winDir, "my.ini"),
+			filepath.Join(winDir, "my.cnf"),
+		)
+	}
+	candidates = append(candidates, `C:\my.ini`, `C:\my.cnf`)
+	return candidates
+}

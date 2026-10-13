@@ -27,3 +27,16 @@ func platformDefaultOptionFile() string {
 	}
 	return os.ExpandEnv(`${HOME}/.my.cnf`)
 }
+
+// platformGlobalOptionCandidates returns candidate filesystem paths for system-wide MySQL option files
+// on Unix-like operating systems in canonical lookup order.
+func platformGlobalOptionCandidates() []string {
+	return []string{
+		"/etc/my.cnf",
+		"/etc/mysql/my.cnf",
+		"/etc/my-client.cnf",
+		"/etc/mysql/client.cnf",
+		"/etc/my.cnf.d/client.cnf",
+		"/usr/local/mysql/etc/my.cnf",
+	}
+}

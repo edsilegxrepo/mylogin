@@ -87,4 +87,23 @@ func TestRunInspect(t *testing.T) {
 	if code != exitError {
 		t.Errorf("expected exitError for missing file, got %d", code)
 	}
+
+	// 5. Successful inspection with global-option-file
+	globalPath := filepath.Join(tempDir, "global.cnf")
+	if err := os.WriteFile(globalPath, []byte("[client]\nconnect_timeout = 42\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile global failed: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"-file", confPath, "-global-option-file", globalPath, "-option-file", optPath, "reporting"}, &stdout, &stderr)
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess with global-option-file, got %d, stderr: %s", code, stderr.String())
+	}
+	out = stdout.String()
+	if !strings.Contains(out, "connect-timeout=42") {
+		t.Errorf("expected connect-timeout=42 in output, got: %s", out)
+	}
+	if !strings.Contains(out, "cascade option files:") {
+		t.Errorf("expected cascade option files in output, got: %s", out)
+	}
 }

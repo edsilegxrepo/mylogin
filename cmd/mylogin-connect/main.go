@@ -50,6 +50,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	sourceDBName := flags.String("source-db", "goanydb", "Source database schema name")
 	targetDBName := flags.String("target-db", "mftcustomdb", "Target database schema name")
 	filePath := flags.String("file", mylogin.DefaultFile(), "Path to .mylogin.cnf file")
+	optionPath := flags.String("option-file", "", "Path to plaintext .my.cnf option file (defaults to auto-discovered)")
+	globalOptionPath := flags.String("global-option-file", "", "Path to global MySQL option file (e.g. /etc/my.cnf or /etc/my-client.cnf)")
 	dryRun := flags.Bool("dry-run", false, "Validate configuration and driver initialization without sending network ping")
 	showVersion := flags.Bool("version", false, "Print version information and exit")
 
@@ -62,8 +64,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitSuccess
 	}
 
+	var optionFiles []string
+	if *globalOptionPath != "" {
+		optionFiles = append(optionFiles, *globalOptionPath)
+	} else {
+		optionFiles = append(optionFiles, mylogin.GlobalOptionFiles()...)
+	}
+	if *optionPath != "" {
+		optionFiles = append(optionFiles, *optionPath)
+	} else if userOpt := mylogin.DefaultOptionFile(); userOpt != "" {
+		optionFiles = append(optionFiles, userOpt)
+	}
+
 	// 1. Resolve and verify source database connection
-	sourceLogin, err := mylogin.ReadResolvedLogin(*filePath, mylogin.DefaultOptionFile(), []string{mylogin.DefaultSection, *sourcePath})
+	sourceLogin, err := mylogin.ReadResolvedLoginHierarchy(*filePath, optionFiles, []string{mylogin.DefaultSection, *sourcePath})
 	if err != nil {
 		printFmt(stderr, "source Get failed: %v\n", err)
 		return exitError
@@ -91,7 +105,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	// 2. Resolve and verify target database connection if configured
 	if *targetPath != "" {
-		targetLogin, err := mylogin.ReadResolvedLogin(*filePath, mylogin.DefaultOptionFile(), []string{mylogin.DefaultSection, *targetPath})
+		targetLogin, err := mylogin.ReadResolvedLoginHierarchy(*filePath, optionFiles, []string{mylogin.DefaultSection, *targetPath})
 		if err != nil {
 			printFmt(stderr, "target Get failed: %v\n", err)
 			return exitError

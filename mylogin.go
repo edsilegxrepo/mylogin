@@ -174,19 +174,19 @@ func CheckPermissions(filename string) error {
 }
 
 // Default reads the resolved default [client] connection view.
-// It automatically incorporates [client] defaults from the plaintext MySQL option file when present,
+// It automatically incorporates [client] defaults from the plaintext MySQL option file cascade (global and user),
 // then overlays [client] values from the encrypted login file.
 func Default() (*Login, error) {
-	return ReadResolvedLogin(DefaultFile(), DefaultOptionFile(), []string{DefaultSection})
+	return ReadResolvedLoginHierarchy(DefaultFile(), DefaultOptionFiles(), []string{DefaultSection})
 }
 
 // Get reads the resolved connection view for a specific login-path section.
 // Merge precedence is:
-// 1. plaintext option file [client]
+// 1. plaintext option file cascade [client] (global files then user file)
 // 2. encrypted login file [client]
 // 3. encrypted login file [section]
 func Get(section string) (*Login, error) {
-	return ReadResolvedLogin(DefaultFile(), DefaultOptionFile(), []string{DefaultSection, section})
+	return ReadResolvedLoginHierarchy(DefaultFile(), DefaultOptionFiles(), []string{DefaultSection, section})
 }
 
 // Load reads all sections from DefaultFile().
@@ -217,8 +217,25 @@ func ReadLogin(filename string, sectionNames []string) (login *Login, err error)
 //
 //	optionFile [client] -> *Login base -> overlay myloginFile [sectionNames...] -> *Login resolved
 func ReadResolvedLogin(myloginFile, optionFile string, sectionNames []string) (*Login, error) {
-	// 1. Load foundational defaults from plaintext option file (e.g., ~/.my.cnf)
-	base, err := ReadClientDefaults(optionFile)
+	var optionFiles []string
+	if optionFile != "" {
+		optionFiles = []string{optionFile}
+	}
+	return ReadResolvedLoginHierarchy(myloginFile, optionFiles, sectionNames)
+}
+
+// ReadResolvedLoginHierarchy reads the encrypted login file and merges it over an ordered
+// cascade of plaintext option files.
+// Merge precedence is:
+// 1. plaintext option files in order (e.g. global defaults -> user overrides)
+// 2. encrypted login file sections in the order supplied by sectionNames
+//
+// Data Flow:
+//
+//	optionFiles [client...] -> *Login base -> overlay myloginFile [sectionNames...] -> *Login resolved
+func ReadResolvedLoginHierarchy(myloginFile string, optionFiles []string, sectionNames []string) (*Login, error) {
+	// 1. Load foundational defaults across the option file cascade
+	base, err := ReadClientDefaultsHierarchy(optionFiles)
 	if err != nil {
 		return nil, err
 	}
@@ -270,8 +287,8 @@ func Parse(rd io.Reader) (sections Sections, err error) {
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		// Skip empty lines and comment lines starting with # or ;
-		if len(line) == 0 || line[0] == '#' || line[0] == ';' {
+		// Skip empty lines, comments ('#' or ';'), and directives ('!include', '!includedir')
+		if len(line) == 0 || line[0] == '#' || line[0] == ';' || line[0] == '!' {
 			continue
 		}
 		// Detect section headers enclosed in square brackets: [section_name]

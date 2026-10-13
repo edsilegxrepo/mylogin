@@ -107,20 +107,28 @@ func (l *Login) SetSocket(socket string) *Login {
 	return l
 }
 
+// normalizeOptionKey converts option names to lowercase, replaces underscores with hyphens,
+// and trims any leading "loose-" prefix to ensure consistent option resolution across MySQL naming conventions.
+func normalizeOptionKey(key string) string {
+	k := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(key), "_", "-"))
+	return strings.TrimPrefix(k, "loose-")
+}
+
 // SetExtra sets an arbitrary extra client option in the Extra map.
-// It initializes the map if currently nil.
+// It initializes the map if currently nil and canonicalizes the key to lowercase kebab-case.
 func (l *Login) SetExtra(key, value string) *Login {
 	if l.Extra == nil {
 		l.Extra = make(map[string]string)
 	}
-	l.Extra[key] = value
+	l.Extra[normalizeOptionKey(key)] = value
 	return l
 }
 
 // Set sets an option by key name, updating standard typed fields or placing non-standard options in Extra.
 // It returns the Login pointer to facilitate fluent configuration chaining.
 func (l *Login) Set(key, value string) *Login {
-	switch key {
+	canon := normalizeOptionKey(key)
+	switch canon {
 	case "user":
 		return l.SetUser(value)
 	case "password":
@@ -132,7 +140,7 @@ func (l *Login) Set(key, value string) *Login {
 	case "socket":
 		return l.SetSocket(value)
 	default:
-		return l.SetExtra(key, value)
+		return l.SetExtra(canon, value)
 	}
 }
 
@@ -227,9 +235,37 @@ func (l *Login) FormatDSN(database string) string {
 	return cfg.FormatDSN()
 }
 
+// isTruthy reports whether a string represents an enabled boolean flag ("1", "true", "on", "yes", "enabled").
+func isTruthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "on", "yes", "enabled":
+		return true
+	default:
+		return false
+	}
+}
+
+// defaultCollationForCharset returns the standard default collation for a MySQL character set.
+func defaultCollationForCharset(charset string) string {
+	switch strings.ToLower(strings.TrimSpace(charset)) {
+	case "utf8mb4":
+		return "utf8mb4_general_ci"
+	case "utf8", "utf8mb3":
+		return "utf8_general_ci"
+	case "latin1":
+		return "latin1_swedish_ci"
+	case "ascii":
+		return "ascii_general_ci"
+	case "binary":
+		return "binary"
+	default:
+		return ""
+	}
+}
+
 // Config creates and initializes a *mysql.Config struct from the Login options.
 // It is nil-safe and returns an empty config if l is nil.
-// Handles socket resolution, host/port network targets, and extra option mapping.
+// Handles socket resolution, host/port network targets, timeouts, collations, and extra option mapping.
 func (l *Login) Config() *mysql.Config {
 	cfg := mysql.NewConfig()
 	if l == nil || l.IsEmpty() {
@@ -243,11 +279,31 @@ func (l *Login) Config() *mysql.Config {
 		cfg.Passwd = *l.Password
 	}
 
-	// UNIX domain socket takes precedence over TCP network addresses
-	if l.Socket != nil {
+	// Protocol & Network Target Resolution:
+	// If protocol is explicitly set to "socket", Unix domain socket is enforced.
+	// If protocol is explicitly set to "tcp", TCP is enforced.
+	// If protocol is unset: if Host is non-empty and not "localhost", TCP is used (avoiding
+	// accidental socket hijacking from cascading global /etc/my.cnf).
+	protocol := ""
+	if l.Extra != nil {
+		protocol = strings.ToLower(l.Extra["protocol"])
+	}
+
+	useUnixSocket := false
+	if protocol == "socket" {
+		useUnixSocket = true
+	} else if protocol != "tcp" {
+		if l.Socket != nil && *l.Socket != "" {
+			if l.Host == nil || *l.Host == "" || strings.EqualFold(*l.Host, "localhost") {
+				useUnixSocket = true
+			}
+		}
+	}
+
+	if useUnixSocket && l.Socket != nil && *l.Socket != "" {
 		cfg.Net = "unix"
 		cfg.Addr = *l.Socket
-	} else if l.Host != nil || l.Port != nil {
+	} else if l.Host != nil || l.Port != nil || protocol == "tcp" {
 		cfg.Net = "tcp"
 		host := "127.0.0.1"
 		port := "3306"
@@ -276,15 +332,123 @@ func (l *Login) Config() *mysql.Config {
 			default:
 				cfg.TLSConfig = mode
 			}
+		} else if isTruthy(l.Extra["skip-ssl"]) {
+			cfg.TLSConfig = "false"
+		} else if sslVal, ok := l.Extra["ssl"]; ok && !isTruthy(sslVal) {
+			cfg.TLSConfig = "false"
 		}
 		if timeoutStr, ok := l.Extra["connect-timeout"]; ok {
 			if sec, err := strconv.Atoi(timeoutStr); err == nil && sec > 0 {
 				cfg.Timeout = time.Duration(sec) * time.Second
 			}
 		}
+		if timeoutStr, ok := l.Extra["read-timeout"]; ok {
+			if sec, err := strconv.Atoi(timeoutStr); err == nil && sec > 0 {
+				cfg.ReadTimeout = time.Duration(sec) * time.Second
+			}
+		}
+		if timeoutStr, ok := l.Extra["write-timeout"]; ok {
+			if sec, err := strconv.Atoi(timeoutStr); err == nil && sec > 0 {
+				cfg.WriteTimeout = time.Duration(sec) * time.Second
+			}
+		}
 		if packetStr, ok := l.Extra["max-allowed-packet"]; ok {
 			if packet, err := strconv.Atoi(packetStr); err == nil && packet > 0 {
 				cfg.MaxAllowedPacket = packet
+			}
+		}
+
+		// Collation and character set mapping
+		if collation, ok := l.Extra["collation"]; ok && collation != "" {
+			cfg.Collation = collation
+		}
+		charset := ""
+		if cs, ok := l.Extra["default-character-set"]; ok {
+			charset = cs
+		} else if cs, ok := l.Extra["charset"]; ok {
+			charset = cs
+		}
+		if charset != "" {
+			if strings.Contains(charset, "_") {
+				// User provided a full collation name (e.g. utf8mb4_general_ci)
+				if cfg.Collation == "" {
+					cfg.Collation = charset
+				}
+			} else {
+				// Character set: map to default collation if not already set, and configure param
+				if cfg.Collation == "" {
+					if defCol := defaultCollationForCharset(charset); defCol != "" {
+						cfg.Collation = defCol
+					}
+				}
+				if cfg.Params == nil {
+					cfg.Params = make(map[string]string)
+				}
+				cfg.Params["charset"] = charset
+			}
+		}
+
+		// Session parameters
+		if cmd, ok := l.Extra["init-command"]; ok && cmd != "" {
+			if cfg.Params == nil {
+				cfg.Params = make(map[string]string)
+			}
+			cfg.Params["init_command"] = cmd
+		}
+		if sm, ok := l.Extra["sql-mode"]; ok && sm != "" {
+			if cfg.Params == nil {
+				cfg.Params = make(map[string]string)
+			}
+			cfg.Params["sql_mode"] = sm
+		}
+
+		// Driver boolean flags
+		if isTruthy(l.Extra["local-infile"]) && !isTruthy(l.Extra["skip-local-infile"]) && !isTruthy(l.Extra["disable-local-infile"]) && !isTruthy(l.Extra["no-local-infile"]) {
+			cfg.AllowAllFiles = true
+		}
+		if isTruthy(l.Extra["enable-cleartext-plugin"]) || isTruthy(l.Extra["allow-cleartext-passwords"]) {
+			cfg.AllowCleartextPasswords = true
+		}
+		if isTruthy(l.Extra["allow-native-passwords"]) {
+			cfg.AllowNativePasswords = true
+		}
+		if isTruthy(l.Extra["check-conn-liveness"]) {
+			cfg.CheckConnLiveness = true
+		}
+		if isTruthy(l.Extra["client-found-rows"]) {
+			cfg.ClientFoundRows = true
+		}
+		if isTruthy(l.Extra["columns-with-alias"]) {
+			cfg.ColumnsWithAlias = true
+		}
+		if isTruthy(l.Extra["interpolate-params"]) {
+			cfg.InterpolateParams = true
+		}
+		if isTruthy(l.Extra["multi-statements"]) {
+			cfg.MultiStatements = true
+		}
+		if isTruthy(l.Extra["parse-time"]) {
+			cfg.ParseTime = true
+		}
+		if isTruthy(l.Extra["reject-read-only"]) {
+			cfg.RejectReadOnly = true
+		}
+
+		// Location / TimeZone
+		if locStr, ok := l.Extra["loc"]; ok && locStr != "" {
+			if loc, err := time.LoadLocation(locStr); err == nil {
+				cfg.Loc = loc
+			}
+		}
+		if tzStr, ok := l.Extra["time-zone"]; ok && tzStr != "" {
+			if cfg.Params == nil {
+				cfg.Params = make(map[string]string)
+			}
+			cfg.Params["time_zone"] = tzStr
+			if cfg.Loc == nil {
+				if loc, err := time.LoadLocation(tzStr); err == nil {
+					cfg.Loc = loc
+				}
 			}
 		}
 	}
@@ -390,19 +554,79 @@ var unquote = strings.NewReplacer(
 	`\\`, `\`,
 ).Replace
 
-// parseLine parses a single "key = value" or "key=value" INI line and assigns it to the Login struct.
+// stripInlineComment removes unquoted trailing comments starting with '#' or ';'.
+func stripInlineComment(s string) string {
+	inQuote := byte(0)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inQuote != 0 {
+			if c == inQuote && (i == 0 || s[i-1] != '\\') {
+				inQuote = 0
+			}
+		} else {
+			if c == '"' || c == '\'' {
+				inQuote = c
+			} else if (c == '#' || c == ';') && (i == 0 || s[i-1] == ' ' || s[i-1] == '\t') {
+				return strings.TrimSpace(s[:i])
+			}
+		}
+	}
+	return s
+}
+
+// isBooleanOption reports whether an option key is a recognized MySQL client boolean flag
+// that may appear without an '= value' in option files.
+func isBooleanOption(key string) bool {
+	switch normalizeOptionKey(key) {
+	case "compress",
+		"quick",
+		"auto-rehash", "no-auto-rehash", "skip-auto-rehash", "disable-auto-rehash",
+		"reconnect", "skip-reconnect", "disable-reconnect",
+		"ssl", "skip-ssl",
+		"local-infile", "skip-local-infile", "disable-local-infile", "no-local-infile",
+		"show-warnings", "skip-show-warnings",
+		"sigint-ignore",
+		"binary-as-hex",
+		"column-names", "skip-column-names",
+		"line-numbers", "skip-line-numbers",
+		"table", "html", "xml", "raw",
+		"vertical", "batch", "silent", "verbose",
+		"parse-time", "parsetime",
+		"interpolate-params", "interpolateparams",
+		"multi-statements", "multistatements",
+		"client-found-rows", "clientfoundrows",
+		"check-conn-liveness", "checkconnliveness":
+		return true
+	default:
+		return false
+	}
+}
+
+// parseLine parses a single "key = value", "key=value", or bare flag line and assigns it to the Login struct.
 func (l *Login) parseLine(line string) error {
 	s := strings.SplitN(line, "=", 2)
 	if len(s) != 2 {
+		token := strings.TrimSpace(stripInlineComment(line))
+		if isBooleanOption(token) {
+			canon := normalizeOptionKey(token)
+			if strings.HasPrefix(canon, "skip-") || strings.HasPrefix(canon, "disable-") || strings.HasPrefix(canon, "no-") {
+				base := strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(canon, "skip-"), "disable-"), "no-")
+				l.Set(base, "false")
+			}
+			l.Set(token, "true")
+			return nil
+		}
 		return fmt.Errorf("invalid line format (missing '='): %q", line)
 	}
 
 	key := strings.TrimSpace(s[0])
-	v := strings.TrimSpace(s[1])
+	v := strings.TrimSpace(stripInlineComment(s[1]))
 
-	// mysql_config_editor quotes strings since MySQL 8.0.24
+	// mysql_config_editor quotes strings since MySQL 8.0.24; plaintext option files may also use single quotes
 	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
 		v = unquote(v[1 : len(v)-1])
+	} else if len(v) >= 2 && v[0] == '\'' && v[len(v)-1] == '\'' {
+		v = strings.ReplaceAll(v[1:len(v)-1], `\'`, `'`)
 	} else {
 		v = unescape(strings.ReplaceAll(v, `\\`, `\`))
 	}
@@ -437,7 +661,7 @@ func (l *Login) Merge(other *Login) {
 			l.Extra = make(map[string]string, len(other.Extra))
 		}
 		for k, v := range other.Extra {
-			l.Extra[k] = v
+			l.Extra[normalizeOptionKey(k)] = v
 		}
 	}
 }

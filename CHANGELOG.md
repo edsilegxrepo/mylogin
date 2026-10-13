@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v1.7.0] - 2026-10-13
+
+### Overview
+Version 1.7.0 introduces canonical global option file auto-discovery (`/etc/my.cnf`, `/etc/mysql/my.cnf`, `/usr/local/etc/my.cnf`, `%WINDIR%\my.ini`, `%PROGRAMDATA%\MySQL\MySQL Server *\my.ini`) establishing a full 4-tier configuration cascade hierarchy, robust AST INI parser hardening (tolerance for `!include` and `!includedir` directives, inline comment stripping, bare boolean flag support, and kebab-case/snake_case key normalization), comprehensive MySQL property mappings to `*mysql.Config` and TLS (read/write timeouts, character set vs. collation disambiguation, session pragmas, TLS version and cipher suite controls, CA path directory loading), and remote TCP socket hijacking prevention.
+
+### Added
+
+#### Global Option Files & 4-Tier Cascade
+- **Global Option File Discovery**: Added [`mylogin.GlobalOptionFiles()`](./clientdefaults.go) and [`mylogin.DefaultOptionFiles()`](./clientdefaults.go) discovering canonical system configuration paths across Linux, macOS, and Windows.
+- **Hierarchical Cascade Resolution**: Added [`mylogin.ReadResolvedLoginHierarchy(myloginFile string, optionFiles []string, sectionNames []string)`](./mylogin.go) and [`mylogin.ReadClientDefaultsHierarchy(filenames []string)`](./clientdefaults.go) executing the full 4-tier precedence:
+  1. Global option files (`/etc/my.cnf`, `%WINDIR%\my.ini`, etc.) `[client]` section (lowest priority)
+  2. User plaintext option files (`~/.my.cnf`, `%APPDATA%\MySQL\.my.cnf`) `[client]` section
+  3. Encrypted `.mylogin.cnf` `[client]` section
+  4. Encrypted `.mylogin.cnf` target login-path section (highest priority)
+- **Environment Overrides**:
+  - `MYSQL_GLOBAL_OPTION_FILE`: Explicitly overrides or specifies global option file path.
+  - `MYSQL_OPTION_FILE`: Explicitly overrides user option file path.
+  - `MYSQL_TEST_OPTION_FILE`: Enforces hermetic testing isolation by overriding option paths and suppressing global scanning.
+
+#### INI Parser Hardening & Normalization
+- **Directive Tolerance**: Safely skips `!include` and `!includedir` directives in `mylogin.Parse()` and `ReadClientDefaults()` without syntax errors.
+- **Inline Comment Stripping**: Strips `#` and `;` comments outside quoted string literals.
+- **Bare Boolean Client Flags**: Recognizes standard MySQL client flags (`compress`, `quick`, `skip-auto-rehash`, `auto-rehash`, `unbuffered`, `batch`, `silent`, `verbose`, `show-warnings`, `skip-column-names`, `skip-line-numbers`, `local-infile`, `skip-local-infile`, `skip-ssl`) without `=` and assigns `"true"`.
+- **Negation Prefix Handling**: Normalizes bare negation flags (`skip-foo`, `disable-foo`, `no-foo`) to also negate the underlying base flag (e.g. `skip-local-infile` sets `local-infile=false`).
+- **Key Normalization**: Automatically normalizes option keys to lowercase kebab-case (`connect_timeout` -> `connect-timeout`) and strips MySQL `loose-` prefixes (`loose-default-character-set` -> `default-character-set`).
+- **Single-Quote Support**: Unquotes single-quoted values (`'value'`) in addition to double quotes (`"value"`).
+
+#### Driver & TLS Property Mapping
+- **Socket Hijacking Mitigation**: Prevents base global/client Unix sockets from hijacking remote TCP host definitions unless `protocol=socket` or `host=localhost`.
+- **Extended Timeouts**: Maps `read-timeout` to `cfg.ReadTimeout` and `write-timeout` to `cfg.WriteTimeout`.
+- **Character Set vs. Collation Disambiguation**: Distinguishes collations (containing `_`) from character sets (`utf8mb4`), mapping canonical default collations (e.g. `utf8mb4_general_ci`) and driver `cfg.Params["charset"]`.
+- **Session & Driver Pragmas**: Maps `init-command`, `sql-mode`, `local-infile`, `enable-cleartext-plugin`, `allow-native-passwords`, `check-conn-liveness`, `client-found-rows`, `columns-with-alias`, `interpolate-params`, `multi-statements`, `parse-time`, `reject-read-only`, and `time-zone` / `loc` into `*mysql.Config`.
+- **Advanced TLS Controls**:
+  - `tls-version`: Maps minimum and maximum TLS protocol versions (`TLSv1.2`, `TLSv1.3`), handling surrounding single or double quotes gracefully.
+  - `ssl-capath`: Loads all PEM-formatted CA certificates from a directory pool, supporting `.pem`, `.crt`, `.cer`, and OpenSSL `c_rehash` numeric hash symlinks (`.0`, `.1`, ...).
+  - `ssl-cipher` / `tls-ciphersuites`: Customizes allowed cipher suites, checking both modern secure suites and legacy/insecure suites (e.g. `TLS_RSA_WITH_AES_128_CBC_SHA`).
+  - `ssl-verify-server-cert`: Toggles server certificate hostname verification.
+  - `skip-ssl` and `ssl=0`: Explicitly disables TLS configuration (`cfg.TLSConfig = "false"`).
+  - SHA-256 profile caching includes all extended TLS attributes for deterministic registration.
+
+#### CLI Enhancements
+- **Multi-File Cascade Flags**: Added `-option-file` and `-global-option-file` flags to `mylogin-dsn`, `mylogin-connect`, and `mylogin-inspect`.
+- **Inspection Reporting**: `mylogin-inspect` now reports all discovered option files in priority cascade order.
+
+---
+
 ## [v1.6.0] - 2026-10-08
 
 ### Overview
@@ -124,6 +170,7 @@ Version 1.5.0 marks a major enterprise hardening and modernization milestone fol
 - INI section tokenization and basic DSN formatting for `go-sql-driver/mysql`.
 
 <!-- Release Link Definitions -->
+[v1.7.0]: https://github.com/edsilegxrepo/mylogin/releases/tag/v1.7.0
 [v1.6.0]: https://github.com/edsilegxrepo/mylogin/releases/tag/v1.6.0
 [v1.5.0]: https://github.com/edsilegxrepo/mylogin/releases/tag/v1.5.0
 [v1.1.0]: https://github.com/dolmen-go/mylogin/releases/tag/v1.1.0

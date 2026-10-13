@@ -49,22 +49,163 @@ func (l *Login) configWithTLS() (*mysql.Config, error) {
 	return cfg, nil
 }
 
-// applyTLS inspects ssl-* options in Login.Extra, constructs the corresponding *tls.Config,
+// parseTLSVersion parses standard MySQL/TLS version strings into crypto/tls version constants.
+func parseTLSVersion(v string) uint16 {
+	s := strings.TrimSpace(v)
+	s = strings.Trim(s, `"'`)
+	switch strings.ToUpper(s) {
+	case "TLSV1", "TLSV1.0":
+		return tls.VersionTLS10
+	case "TLSV1.1":
+		return tls.VersionTLS11
+	case "TLSV1.2":
+		return tls.VersionTLS12
+	case "TLSV1.3":
+		return tls.VersionTLS13
+	default:
+		return 0
+	}
+}
+
+// parseCipherSuites translates colon-, comma-, or space-separated cipher suite names into crypto/tls IDs.
+// It checks both standard secure cipher suites and legacy/insecure cipher suites supported by Go crypto/tls.
+func parseCipherSuites(ciphers string) []uint16 {
+	if ciphers == "" {
+		return nil
+	}
+	tokens := strings.FieldsFunc(ciphers, func(r rune) bool {
+		return r == ':' || r == ',' || r == ' '
+	})
+	available := append(tls.CipherSuites(), tls.InsecureCipherSuites()...)
+	var ids []uint16
+	for _, tok := range tokens {
+		clean := strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(tok, "-", "_"), " ", ""))
+		for _, cs := range available {
+			csClean := strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(cs.Name, "-", "_"), " ", ""))
+			if clean == csClean || clean == strings.TrimPrefix(csClean, "TLS_") {
+				ids = append(ids, cs.ID)
+				break
+			}
+		}
+	}
+	return ids
+}
+
+// isCertFile reports whether a filename has a recognized CA certificate extension
+// (.pem, .crt, .cer) or an OpenSSL c_rehash numeric hash extension (.0, .1, ...).
+func isCertFile(name string) bool {
+	ext := strings.ToLower(filepath.Ext(name))
+	if ext == ".pem" || ext == ".crt" || ext == ".cer" {
+		return true
+	}
+	if len(ext) > 1 && ext[0] == '.' {
+		for _, r := range ext[1:] {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// loadPEMsFromDir reads all PEM-encoded certificates from files in dir and appends them to pool.
+// It recognizes .pem, .crt, .cer files as well as OpenSSL c_rehash hash symlinks (.0, .1, ...).
+// It returns the count of certificates successfully appended.
+func loadPEMsFromDir(dir string, pool *x509.CertPool) (int, error) {
+	cleanDir := filepath.Clean(dir)
+	entries, err := os.ReadDir(cleanDir) // #nosec G304 -- library intentionally reads caller-specified CA directory
+	if err != nil {
+		return 0, fmt.Errorf("read ssl-capath directory: %w", err)
+	}
+	loaded := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if isCertFile(entry.Name()) {
+			certData, err := os.ReadFile(filepath.Join(cleanDir, entry.Name())) // #nosec G304
+			if err == nil && pool.AppendCertsFromPEM(certData) {
+				loaded++
+			}
+		}
+	}
+	return loaded, nil
+}
+
+// loadRootCADir reads all PEM-encoded certificates from files in a directory and returns an x509.CertPool.
+func loadRootCADir(dir string) (*x509.CertPool, error) {
+	pool := x509.NewCertPool()
+	loaded, err := loadPEMsFromDir(dir, pool)
+	if err != nil {
+		return nil, err
+	}
+	if loaded == 0 {
+		return nil, fmt.Errorf("parse ssl-capath: no certificates loaded from %s", dir)
+	}
+	return pool, nil
+}
+
+// loadRootCAPool reads CA certificates from both a file (ssl-ca) and/or a directory (ssl-capath).
+func loadRootCAPool(caPath, caDir string) (*x509.CertPool, error) {
+	if caPath == "" && caDir == "" {
+		return nil, nil
+	}
+	if caPath != "" && caDir == "" {
+		return loadRootCAs(caPath)
+	}
+	if caPath == "" && caDir != "" {
+		return loadRootCADir(caDir)
+	}
+	pool, err := loadRootCAs(caPath)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := loadPEMsFromDir(caDir, pool); err != nil {
+		return nil, err
+	}
+	return pool, nil
+}
+
+// applyTLS inspects ssl-* and tls-* options in Login.Extra, constructs the corresponding *tls.Config,
 // registers it with the mysql driver under a unique key, and updates cfg.TLSConfig.
 func (l *Login) applyTLS(cfg *mysql.Config) error {
 	mode, hasMode := l.Extra["ssl-mode"]
 	caPath, hasCA := l.Extra["ssl-ca"]
+	caDir, hasCADir := l.Extra["ssl-capath"]
 	certPath, hasCert := l.Extra["ssl-cert"]
 	keyPath, hasKey := l.Extra["ssl-key"]
+	tlsVersionStr, hasTLSVersion := l.Extra["tls-version"]
+	cipherStr, hasCipher := l.Extra["ssl-cipher"]
+	if !hasCipher {
+		cipherStr, hasCipher = l.Extra["tls-ciphersuites"]
+	}
+	hasVerifyServerCert := isTruthy(l.Extra["ssl-verify-server-cert"])
+
+	if !hasMode {
+		if isTruthy(l.Extra["skip-ssl"]) {
+			mode = "DISABLED"
+			hasMode = true
+		} else if sslVal, ok := l.Extra["ssl"]; ok {
+			if !isTruthy(sslVal) {
+				mode = "DISABLED"
+				hasMode = true
+			} else {
+				mode = "REQUIRED"
+				hasMode = true
+			}
+		}
+	}
 
 	// If no TLS options are present, leave driver default TLS settings intact.
-	if !hasMode && !hasCA && !hasCert && !hasKey {
+	if !hasMode && !hasCA && !hasCADir && !hasCert && !hasKey && !hasTLSVersion && !hasCipher && !hasVerifyServerCert {
 		return nil
 	}
 
 	upperMode := strings.ToUpper(mode)
-	// If certificates/keys are provided without explicit mode, default to REQUIRED.
-	if !hasMode && (hasCA || hasCert || hasKey) {
+	if !hasMode && hasVerifyServerCert {
+		upperMode = "VERIFY_IDENTITY"
+	} else if !hasMode && (hasCA || hasCADir || hasCert || hasKey || hasTLSVersion || hasCipher) {
 		upperMode = "REQUIRED"
 	}
 
@@ -82,9 +223,9 @@ func (l *Login) applyTLS(cfg *mysql.Config) error {
 		// Verify the certificate chain against the trusted CA, but do not require hostname verification.
 		tlsCfg.InsecureSkipVerify = true
 		var roots *x509.CertPool
-		if hasCA {
+		if hasCA || hasCADir {
 			var err error
-			roots, err = loadRootCAs(caPath)
+			roots, err = loadRootCAPool(caPath, caDir)
 			if err != nil {
 				return err
 			}
@@ -96,8 +237,8 @@ func (l *Login) applyTLS(cfg *mysql.Config) error {
 
 	case "VERIFY_IDENTITY":
 		// Full verification: verify certificate chain against CA and verify server hostname.
-		if hasCA {
-			roots, err := loadRootCAs(caPath)
+		if hasCA || hasCADir {
+			roots, err := loadRootCAPool(caPath, caDir)
 			if err != nil {
 				return err
 			}
@@ -111,8 +252,8 @@ func (l *Login) applyTLS(cfg *mysql.Config) error {
 	}
 
 	// In REQUIRED mode, if a custom CA was supplied, load it into RootCAs for optional server validation.
-	if hasCA && upperMode == "REQUIRED" {
-		roots, err := loadRootCAs(caPath)
+	if (hasCA || hasCADir) && upperMode == "REQUIRED" {
+		roots, err := loadRootCAPool(caPath, caDir)
 		if err != nil {
 			return err
 		}
@@ -131,9 +272,41 @@ func (l *Login) applyTLS(cfg *mysql.Config) error {
 		tlsCfg.Certificates = []tls.Certificate{cert}
 	}
 
+	// Configure TLS min/max version if specified
+	if hasTLSVersion && tlsVersionStr != "" {
+		parts := strings.FieldsFunc(tlsVersionStr, func(r rune) bool {
+			return r == ',' || r == ' '
+		})
+		var minVer, maxVer uint16
+		for _, part := range parts {
+			if v := parseTLSVersion(part); v != 0 {
+				if minVer == 0 || v < minVer {
+					minVer = v
+				}
+				if v > maxVer {
+					maxVer = v
+				}
+			}
+		}
+		if minVer != 0 {
+			tlsCfg.MinVersion = minVer
+		}
+		if maxVer != 0 {
+			tlsCfg.MaxVersion = maxVer
+		}
+	}
+
+	// Configure custom cipher suites if specified
+	if hasCipher && cipherStr != "" {
+		if ciphers := parseCipherSuites(cipherStr); len(ciphers) > 0 {
+			tlsCfg.CipherSuites = ciphers
+		}
+	}
+
 	// Compute deterministic registration key from configuration parameters to prevent memory leaks in driver registry.
 	h := sha256.New()
-	_, _ = fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s", upperMode, caPath, certPath, keyPath)
+	_, _ = fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s",
+		upperMode, caPath, certPath, keyPath, caDir, tlsVersionStr, cipherStr)
 	name := fmt.Sprintf("mylogin_tls_%x", h.Sum(nil)[:8])
 
 	if _, loaded := registeredTLSConfigs.LoadOrStore(name, struct{}{}); !loaded {

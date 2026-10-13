@@ -65,15 +65,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 
 	var (
-		database    string
-		filename    string
-		showVersion bool
+		database         string
+		filename         string
+		optionPath       string
+		globalOptionPath string
+		showVersion      bool
 	)
 	flags.StringVar(&database, "database", "", "database name to append to DSN")
 	flags.StringVar(&filename, "file", mylogin.DefaultFile(), "path to .mylogin.cnf")
+	flags.StringVar(&optionPath, "option-file", "", "path to plaintext .my.cnf option file")
+	flags.StringVar(&globalOptionPath, "global-option-file", "", "path to global MySQL option file (e.g. /etc/my.cnf)")
 	flags.BoolVar(&showVersion, "version", false, "display version and exit")
 	flags.Usage = func() {
-		printFmt(stderr, "Usage: mylogin-dsn [-file <path>] [-database <dbname>] [<section> ...]\n")
+		printFmt(stderr, "Usage: mylogin-dsn [-file <path>] [-option-file <path>] [-global-option-file <path>] [-database <dbname>] [<section> ...]\n")
 		flags.PrintDefaults()
 	}
 
@@ -93,7 +97,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 		sections = flags.Args()
 	}
 
-	login, err := mylogin.ReadLogin(filename, sections)
+	var optionFiles []string
+	if globalOptionPath != "" {
+		optionFiles = append(optionFiles, globalOptionPath)
+	}
+	if optionPath != "" {
+		optionFiles = append(optionFiles, optionPath)
+	}
+
+	var login *mylogin.Login
+	var err error
+	if len(optionFiles) > 0 {
+		login, err = mylogin.ReadResolvedLoginHierarchy(filename, optionFiles, sections)
+	} else {
+		login, err = mylogin.ReadLogin(filename, sections)
+	}
 	if err != nil {
 		return handleFileError("mylogin-dsn", err, stderr)
 	}

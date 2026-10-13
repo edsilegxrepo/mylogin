@@ -249,3 +249,197 @@ func TestTopLevelDefaultAndGetWithOptionFile(t *testing.T) {
 		t.Errorf("expected port 3307 from option file, got %+v", app.Port)
 	}
 }
+
+// TestParseOptionDirectivesAndBareFlags verifies that Parse and ReadClientDefaults gracefully
+// tolerate !include directives, parse bare boolean flags, unquote single quotes, strip inline comments,
+// and canonicalize keys across hyphens and underscores.
+func TestParseOptionDirectivesAndBareFlags(t *testing.T) {
+	rawINI := `
+!include /etc/mysql/conf.d/extra.cnf
+!includedir /etc/my.cnf.d
+
+[client]
+user = 'single_quoted_user' # inline comment with hash
+password = "double_quoted_password" ; inline comment with semicolon
+host = 127.0.0.1
+port = 3306
+compress
+quick
+connect_timeout = 15
+default_character_set = utf8mb4
+`
+	tmpDir := t.TempDir()
+	optFile := filepath.Join(tmpDir, "tolerant.cnf")
+	if err := os.WriteFile(optFile, []byte(rawINI), 0o600); err != nil {
+		t.Fatalf("failed to write option file: %v", err)
+	}
+
+	login, err := mylogin.ReadClientDefaults(optFile)
+	if err != nil {
+		t.Fatalf("ReadClientDefaults failed on resilient INI: %v", err)
+	}
+
+	if login.User == nil || *login.User != "single_quoted_user" {
+		t.Errorf("expected user single_quoted_user, got %+v", login.User)
+	}
+	if login.Password == nil || *login.Password != "double_quoted_password" {
+		t.Errorf("expected password double_quoted_password, got %+v", login.Password)
+	}
+	if login.Host == nil || *login.Host != "127.0.0.1" {
+		t.Errorf("expected host 127.0.0.1, got %+v", login.Host)
+	}
+	if login.Port == nil || *login.Port != "3306" {
+		t.Errorf("expected port 3306, got %+v", login.Port)
+	}
+	if login.Extra["compress"] != "true" {
+		t.Errorf("expected compress=true, got %q", login.Extra["compress"])
+	}
+	if login.Extra["quick"] != "true" {
+		t.Errorf("expected quick=true, got %q", login.Extra["quick"])
+	}
+	if login.Extra["connect-timeout"] != "15" {
+		t.Errorf("expected canonical connect-timeout=15, got %q", login.Extra["connect-timeout"])
+	}
+	if login.Extra["default-character-set"] != "utf8mb4" {
+		t.Errorf("expected canonical default-character-set=utf8mb4, got %q", login.Extra["default-character-set"])
+	}
+}
+
+// Test4TierCascadePrecedence verifies that the multi-tier cascade correctly merges:
+// Tier 1 (Global option file) -> Tier 2 (User option file) -> Tier 3 (.mylogin.cnf [client]) -> Tier 4 (.mylogin.cnf [section])
+func Test4TierCascadePrecedence(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalFile := filepath.Join(tmpDir, "my-client.cnf")
+	userFile := filepath.Join(tmpDir, ".my.cnf")
+	loginFile := filepath.Join(tmpDir, ".mylogin.cnf")
+
+	// Tier 1: Global file defines port=3306, read-timeout=10, default-character-set=utf8mb4
+	globalINI := "[client]\nport = 3306\nread-timeout = 10\ndefault-character-set = utf8mb4\n"
+	if err := os.WriteFile(globalFile, []byte(globalINI), 0o600); err != nil {
+		t.Fatalf("write global file: %v", err)
+	}
+
+	// Tier 2: User file overrides port=3307, sets write-timeout=20
+	userINI := "[client]\nport = 3307\nwrite-timeout = 20\n"
+	if err := os.WriteFile(userFile, []byte(userINI), 0o600); err != nil {
+		t.Fatalf("write user file: %v", err)
+	}
+
+	// Tier 3 & 4: Encrypted login file
+	secs := mylogin.Sections{
+		{
+			Name:  "client",
+			Login: *new(mylogin.Login).SetUser("client_user").SetHost("cluster.local"),
+		},
+		{
+			Name:  "production",
+			Login: *new(mylogin.Login).SetUser("prod_user").SetHost("prod.internal"),
+		},
+	}
+	formatted, err := secs.Format()
+	if err != nil {
+		t.Fatalf("format sections: %v", err)
+	}
+	if err := mylogin.WriteFile(loginFile, strings.NewReader(formatted)); err != nil {
+		t.Fatalf("write encrypted login: %v", err)
+	}
+
+	resolved, err := mylogin.ReadResolvedLoginHierarchy(loginFile, []string{globalFile, userFile}, []string{"client", "production"})
+	if err != nil {
+		t.Fatalf("ReadResolvedLoginHierarchy: %v", err)
+	}
+
+	// Host should be overridden by Tier 4 [production]
+	if resolved.Host == nil || *resolved.Host != "prod.internal" {
+		t.Errorf("expected host prod.internal, got %+v", resolved.Host)
+	}
+	// User should be overridden by Tier 4 [production]
+	if resolved.User == nil || *resolved.User != "prod_user" {
+		t.Errorf("expected user prod_user, got %+v", resolved.User)
+	}
+	// Port should be overridden by Tier 2 [userFile] (3307 overriding Tier 1 3306)
+	if resolved.Port == nil || *resolved.Port != "3307" {
+		t.Errorf("expected port 3307, got %+v", resolved.Port)
+	}
+	// read-timeout should come from Tier 1 [globalFile]
+	if resolved.Extra["read-timeout"] != "10" {
+		t.Errorf("expected read-timeout 10, got %q", resolved.Extra["read-timeout"])
+	}
+	// write-timeout should come from Tier 2 [userFile]
+	if resolved.Extra["write-timeout"] != "20" {
+		t.Errorf("expected write-timeout 20, got %q", resolved.Extra["write-timeout"])
+	}
+	// default-character-set should come from Tier 1 [globalFile]
+	if resolved.Extra["default-character-set"] != "utf8mb4" {
+		t.Errorf("expected default-character-set utf8mb4, got %q", resolved.Extra["default-character-set"])
+	}
+}
+
+func TestGlobalOptionFiles_EnvOverrides(t *testing.T) {
+	tmpDir := t.TempDir()
+	customGlobal := filepath.Join(tmpDir, "custom-global.cnf")
+	if err := os.WriteFile(customGlobal, []byte("[client]\n"), 0o600); err != nil {
+		t.Fatalf("write custom global: %v", err)
+	}
+
+	// 1. Explicit override via MYSQL_GLOBAL_OPTION_FILE
+	t.Setenv("MYSQL_TEST_OPTION_FILE", "")
+	t.Setenv("MYSQL_GLOBAL_OPTION_FILE", customGlobal)
+	files := mylogin.GlobalOptionFiles()
+	if len(files) != 1 || files[0] != customGlobal {
+		t.Errorf("expected [%s], got %+v", customGlobal, files)
+	}
+
+	// 2. Explicit suppression via "none"
+	t.Setenv("MYSQL_GLOBAL_OPTION_FILE", "none")
+	if files := mylogin.GlobalOptionFiles(); len(files) != 0 {
+		t.Errorf("expected empty for MYSQL_GLOBAL_OPTION_FILE=none, got %+v", files)
+	}
+
+	// 3. Hermetic test boundary suppression via MYSQL_TEST_OPTION_FILE
+	t.Setenv("MYSQL_GLOBAL_OPTION_FILE", customGlobal)
+	t.Setenv("MYSQL_TEST_OPTION_FILE", filepath.Join(tmpDir, "test.cnf"))
+	if files := mylogin.GlobalOptionFiles(); len(files) != 0 {
+		t.Errorf("expected empty when MYSQL_TEST_OPTION_FILE is active, got %+v", files)
+	}
+
+	// 4. Nonexistent file specified via MYSQL_GLOBAL_OPTION_FILE returns nil
+	t.Setenv("MYSQL_TEST_OPTION_FILE", "")
+	t.Setenv("MYSQL_GLOBAL_OPTION_FILE", filepath.Join(tmpDir, "missing-global.cnf"))
+	if files := mylogin.GlobalOptionFiles(); len(files) != 0 {
+		t.Errorf("expected empty for missing MYSQL_GLOBAL_OPTION_FILE, got %+v", files)
+	}
+
+	// 5. Test MYSQL_OPTION_FILE override on DefaultOptionFile and DefaultOptionFiles
+	userOpt := filepath.Join(tmpDir, "my-user.cnf")
+	_ = os.WriteFile(userOpt, []byte("[client]\n"), 0o600)
+	t.Setenv("MYSQL_GLOBAL_OPTION_FILE", customGlobal)
+	t.Setenv("MYSQL_OPTION_FILE", userOpt)
+	t.Setenv("MYSQL_TEST_OPTION_FILE", "")
+
+	if got := mylogin.DefaultOptionFile(); got != userOpt {
+		t.Errorf("expected DefaultOptionFile=%s, got %s", userOpt, got)
+	}
+	allFiles := mylogin.DefaultOptionFiles()
+	if len(allFiles) != 2 || allFiles[0] != customGlobal || allFiles[1] != userOpt {
+		t.Errorf("expected [customGlobal, userOpt], got %+v", allFiles)
+	}
+}
+
+// TestReadClientDefaultsHierarchy_EdgeCases tests edge cases such as empty input slices and missing files.
+func TestReadClientDefaultsHierarchy_EdgeCases(t *testing.T) {
+	// 1. Empty slice returns empty login without error
+	login, err := mylogin.ReadClientDefaultsHierarchy(nil)
+	if err != nil || login == nil || !login.IsEmpty() {
+		t.Errorf("expected empty login and nil error for nil slice, got %v, %+v", err, login)
+	}
+
+	// 2. Non-existent files in hierarchy are skipped gracefully
+	tmpDir := t.TempDir()
+	missing1 := filepath.Join(tmpDir, "missing1.cnf")
+	missing2 := filepath.Join(tmpDir, "missing2.cnf")
+	login, err = mylogin.ReadClientDefaultsHierarchy([]string{missing1, missing2})
+	if err != nil || login == nil || !login.IsEmpty() {
+		t.Errorf("expected empty login and nil error for missing files, got %v, %+v", err, login)
+	}
+}

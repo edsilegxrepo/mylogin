@@ -25,8 +25,8 @@ MySQL client utilities read obfuscated authentication credentials from `~/.mylog
 1. **Native Pure-Go Implementation**: Execute reading, writing, and administrative operations on `.mylogin.cnf` without requiring MySQL client binaries (`mysql`, `mysql_config_editor`) or CGO dynamic libraries installed in the runtime container.
 2. **Plaintext DSN Elimination**: Provide direct `driver.Connector` and `sql.OpenDB` handles via [`Login.Open()`](./login.go#L358) and [`Login.Connector()`](./login.go#L348), integrating full TLS/SSL, custom Root CAs (`ssl-ca`), and mutual TLS (`ssl-cert`, `ssl-key`) while preventing passwords from being exposed in Data Source Name (DSN) connection strings and downstream driver error logs.
 3. **Automated Credential Redaction**: Mask credentials by default in [`Login.String()`](./login.go#L317) and implement [`slog.LogValuer`](./login.go#L323) so that passing credential instances to structured logging systems (`log/slog`) never leaks passwords to log aggregators.
-4. **Resilience and Panic Immunity**: Ensure robust AST parsing that rejects malformed tokens, prevents nil pointer dereferences, handles arbitrary newline formats, and uses atomic temporary file replacement for zero-corruption file writes.
-5. **Cascading Option File Integration**: Automatically discover and merge user plaintext option files (`~/.my.cnf` on Unix/macOS, `%APPDATA%\MySQL\.my.cnf` on Windows) beneath encrypted `.mylogin.cnf` sections via [`ReadResolvedLogin`](./mylogin.go#L215), preserving MySQL CLI cascade conventions.
+4. **Resilience and Panic Immunity**: Ensure robust AST parsing that rejects malformed tokens, prevents nil pointer dereferences, handles arbitrary newline formats, safely skips `!include` and `!includedir` directives, normalizes kebab-case/snake_case keys, and uses atomic temporary file replacement for zero-corruption file writes.
+5. **Cascading Multi-Tier Option File Integration**: Automatically discover and merge canonical global option files (`/etc/my.cnf`, `/etc/mysql/my.cnf`, `/usr/local/etc/my.cnf`, `%WINDIR%\my.ini`, `%PROGRAMDATA%\MySQL\MySQL Server *\my.ini`) and user plaintext option files (`~/.my.cnf`, `~/.my-client.cnf`, `%APPDATA%\MySQL\.my.cnf`) beneath encrypted `.mylogin.cnf` sections via [`ReadResolvedLoginHierarchy`](./mylogin.go) and [`Default()`](./mylogin.go) / [`Get()`](./mylogin.go), preserving standard MySQL 4-tier CLI cascade conventions with environment overrides (`MYSQL_GLOBAL_OPTION_FILE`, `MYSQL_OPTION_FILE`).
 
 *For architectural design choices, component block diagrams, and edge-case handling strategies, refer to [ARCHITECTURE.md § 1. Architecture, Design Choices, Assumptions, Edge Cases, and Efficiency](./ARCHITECTURE.md#1-architecture-design-choices-assumptions-edge-cases-and-efficiency).*
 
@@ -34,12 +34,17 @@ MySQL client utilities read obfuscated authentication credentials from `~/.mylog
 
 ## 2. Security Assessment
 
-### 2.1 Encryption in Transit
+### 2.1 Encryption in Transit and Driver Property Mapping
 
-The module parses connection parameters from `.mylogin.cnf` and maps security configurations directly into `*mysql.Config` instances from [`github.com/go-sql-driver/mysql`](https://github.com/go-sql-driver/mysql):
+The module parses connection parameters from `.mylogin.cnf` and cascading option files, mapping security configurations and session parameters directly into `*mysql.Config` instances from [`github.com/go-sql-driver/mysql`](https://github.com/go-sql-driver/mysql):
 - `ssl-mode` parameters (`DISABLED`, `REQUIRED`, `VERIFY_CA`, `VERIFY_IDENTITY`) translate directly into driver TLS configurations.
 - `ssl-ca` automatically loads custom Root CAs from PEM files into dedicated `x509.CertPool` trust stores, supporting enterprise self-signed certificates with custom chain verification.
+- `ssl-capath` loads all PEM-formatted CA certificates located within a designated directory.
 - `ssl-cert` and `ssl-key` configure mutual TLS (mTLS) client certificate authentication via `tls.LoadX509KeyPair`.
+- `tls-version` specifies minimum TLS protocols (e.g. `TLSv1.2`, `TLSv1.3`).
+- `ssl-cipher` / `tls-ciphersuites` configures cryptographic cipher suites.
+- Extended timeouts and session pragmas (`connect-timeout`, `read-timeout`, `write-timeout`, `max-allowed-packet`, `init-command`, `sql-mode`, `local-infile`, `interpolate-params`, `multi-statements`, `parse-time`, `reject-read-only`, `time-zone`/`loc`, and character set/collation) are automatically mapped to driver settings.
+- Socket Hijacking Mitigation ensures global or client Unix sockets never override explicitly configured remote TCP hosts unless `protocol=socket` or `host=localhost`.
 - Queries executed through handles returned by `Login.Open()` enforce encrypted TLS wire transport between the client process and MySQL.
 
 ### 2.2 Secret Management and Memory Sanitization
@@ -127,12 +132,14 @@ Lists all configured login path section names, one per line.
 Generates Data Source Name (DSN) connection strings suitable for `go-sql-driver/mysql` or MySQL CLI connection arguments.
 
 ```
-Usage: mylogin-dsn [-file <path>] [-database <dbname>] [<section> ...]
+Usage: mylogin-dsn [-file <path>] [-option-file <path>] [-global-option-file <path>] [-database <dbname>] [<section> ...]
 ```
 
 | Flag | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `-file` | `string` | `~/.mylogin.cnf` | Path to option file. |
+| `-option-file` | `string` | `""` | User plaintext option file to merge into hierarchy (e.g. `~/.my.cnf`). |
+| `-global-option-file` | `string` | `""` | Global option file to merge into hierarchy (e.g. `/etc/my.cnf`). |
 | `-database` | `string` | `""` | Database schema name appended to the resulting DSN. |
 | `-version` | `bool` | `false` | Display version and exit. |
 
@@ -155,8 +162,38 @@ Usage: mylogin-key [-version] [<file> ...]
 
 ### 4.4 Diagnostic Utilities
 
-- [`cmd/mylogin-inspect`](./cmd/mylogin-inspect/main.go): Diagnostic tool inspecting option file discovery, resolved parameters, password presence, and extra configuration attributes.
-- [`cmd/mylogin-connect`](./cmd/mylogin-connect/main.go): Verification utility testing live end-to-end database connectivity and ping operations against configured target databases.
+#### `mylogin-inspect`
+Diagnostic tool inspecting option file discovery, resolved connection parameters, password presence, and extra configuration attributes across the 4-tier cascade.
+
+```
+Usage: mylogin-inspect [-file <path>] [-option-file <path>] [-global-option-file <path>] [-version] [<section> ...]
+```
+
+| Flag | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `-file` | `string` | `~/.mylogin.cnf` | Path to encrypted `.mylogin.cnf` option file. |
+| `-option-file` | `string` | `""` | User plaintext option file (overrides default `~/.my.cnf` / `%APPDATA%\MySQL\.my.cnf`). |
+| `-global-option-file` | `string` | `""` | Global option file (overrides `/etc/my.cnf` / `%WINDIR%\my.ini`). |
+| `-version` | `bool` | `false` | Display version and exit. |
+
+#### `mylogin-connect`
+Verification utility testing live end-to-end database connectivity and ping operations against configured target databases.
+
+```
+Usage: mylogin-connect [-file <path>] [-option-file <path>] [-global-option-file <path>] [-source <sec>] [-target <sec>] [-dry-run] [-version]
+```
+
+| Flag | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `-file` | `string` | `~/.mylogin.cnf` | Path to encrypted `.mylogin.cnf` option file. |
+| `-option-file` | `string` | `""` | User plaintext option file to merge into hierarchy. |
+| `-global-option-file` | `string` | `""` | Global option file to merge into hierarchy. |
+| `-source` | `string` | `""` | Source login path section name (falls back to `$MYSQL_HOST` / `$MYSQL_DB_BACKUP_SVC`). |
+| `-source-db` | `string` | `""` | Source database schema name to select upon connection. |
+| `-target` | `string` | `""` | Optional target login path section name to verify secondary replication/backup endpoints. |
+| `-target-db` | `string` | `""` | Target database schema name to select upon connection. |
+| `-dry-run` | `bool` | `false` | Validate connector and configuration without performing network pings. |
+| `-version` | `bool` | `false` | Display version and exit. |
 
 ---
 

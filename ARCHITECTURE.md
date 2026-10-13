@@ -13,22 +13,23 @@ The `mylogin` library provides serialization, deserialization, manipulation, and
 ```mermaid
 graph TD
     subgraph StorageLayer["Storage Layer (Filesystem)"]
+        F0["Global Option Files (/etc/my.cnf, /etc/mysql/my.cnf, %WINDIR%\my.ini)"]
         F1["~/.mylogin.cnf (AES-128-CBC with Zero IV)"]
-        F2["~/.my.cnf / %APPDATA%/MySQL/.my.cnf (Plaintext Client Defaults)"]
+        F2["~/.my.cnf / %APPDATA%/MySQL/.my.cnf (User Client Defaults)"]
     end
 
     subgraph CoreCrypto["Cryptographic Transformation Layer"]
-        C1["mylogin.NewFile / ReadLogin / ReadSections / ReadResolvedLogin"]
+        C1["mylogin.NewFile / ReadLogin / ReadSections / ReadResolvedLoginHierarchy"]
         C2["Key Derivation & Validation (20-byte Key)"]
         C3["AES-128-CBC Cipher Engine (Zero IV)"]
         C4["PKCS#7 Padding Handler"]
     end
 
     subgraph ParseLayer["Parsing & Abstract Syntax Layer"]
-        P1["mylogin.Parse"]
+        P1["mylogin.Parse (Directive & Comment Filter)"]
         P2["mylogin.FilterSection (Stream Demux)"]
-        P3["parseLine (Token Extractor)"]
-        P4["ReadClientDefaults (Plaintext Parser)"]
+        P3["parseLine (Token & Boolean Flag Extractor)"]
+        P4["ReadClientDefaultsHierarchy (Multi-File Plaintext Parser)"]
     end
 
     subgraph ModelLayer["Domain Model Layer"]
@@ -48,9 +49,10 @@ graph TD
         I8["cmd/mylogin-connect (Connection Ping)"]
     end
 
+    F0 -->|Global Plaintext| P4
+    F2 -->|User Plaintext| P4
     F1 -->|Raw Byte Stream| C1
-    F2 -->|Plaintext Stream| P4
-    P4 -->|Client Defaults| C1
+    P4 -->|Cascaded Defaults| C1
     C1 --> C2
     C2 --> C3
     C3 --> C4
@@ -94,6 +96,18 @@ graph TD
    - Traditional MySQL Go implementations build a Data Source Name (DSN) string (`user:pass@tcp(host:port)/db`) and invoke `sql.Open("mysql", dsn)`. If the driver logs connection attempts, failures, or errors, the password string may be written to standard log streams.
    - `Login.Connector(db)` directly returns a `driver.Connector` utilizing `mysql.NewConnector`, and `Login.Open(db)` returns `*sql.DB` via `sql.OpenDB`. This keeps credentials encapsulated within driver structs, avoiding string formatting entirely.
 
+5. **4-Tier Cascade Hierarchy and Property Normalization**:
+   - Following canonical MySQL client behavior, settings merge hierarchically:
+     1. Global option files (`/etc/my.cnf`, `/etc/mysql/my.cnf`, `/usr/local/etc/my.cnf`, `%WINDIR%\my.ini`, `%PROGRAMDATA%\MySQL\MySQL Server *\my.ini`)
+     2. User plaintext option files (`~/.my.cnf`, `~/.my-client.cnf`, `%APPDATA%\MySQL\.my.cnf`)
+     3. Encrypted `.mylogin.cnf` `[client]` section
+     4. Encrypted `.mylogin.cnf` target login-path section
+   - Option keys are normalized to lowercase kebab-case (`connect_timeout` -> `connect-timeout`).
+   - `!include` and `!includedir` directives are safely tolerated and skipped.
+   - Inline comments (`#` and `;`) outside of quotes are cleanly stripped.
+   - Bare boolean flags (`compress`, `quick`, `skip-auto-rehash`) are parsed as boolean `"true"`.
+   - Comprehensive mapping to `*mysql.Config` translates timeouts, character sets vs collations, session pragmas, and TLS certificates/ciphers/versions while mitigating socket hijacking against remote hosts.
+
 ### 1.3 Assumptions
 
 - **Filesystem Boundary as Root of Trust**: The security of `.mylogin.cnf` relies on host-level OS permissions (POSIX mode `0600`). Any local user possessing read permissions on the file can derive the key and decrypt the stored credentials.
@@ -112,6 +126,10 @@ graph TD
 | **Invalid Port Numbers** | Port specified as non-numeric string. | [`parseLine`](./login.go#L383) runs `strconv.ParseUint(v, 10, 16)` and fails if out of bounds (`0-65535`). |
 | **Windows Permissions vs. POSIX** | Windows filesystem ACLs lack standard POSIX `0600` bitmasks. | Platform-specific file checking in [`defaultfile_windows.go`](./defaultfile_windows.go) bypasses POSIX permission checks while [`mylogin.go`](./mylogin.go#L162) enforces `0600` on Unix platforms. |
 | **Concurrent File Modification** | External process (`mysql_config_editor`) writes while reading. | [`WriteFile`](./mylogin.go#L557) writes to a temporary file in the same directory (`.mylogin-*.tmp`) and executes an atomic `os.Rename`, preventing partial file corruptions. |
+| **Directives (`!include` / `!includedir`)** | MySQL option files containing include directives. | Safely skipped during streaming tokenization in [`Parse`](./mylogin.go#L29) and [`ReadClientDefaults`](./clientdefaults.go#L145) to prevent parser errors. |
+| **Socket Hijacking by Global Defaults** | Global `/etc/my.cnf` defines local socket, but target section configures remote TCP host. | [`Config`](./login.go#L235) discards default socket unless `protocol=socket` or `host=localhost`, preventing TCP connection hijacking. |
+| **Charset vs. Collation Confusion** | Option specifies charset (e.g. `utf8mb4`) where driver expects collation. | [`Config`](./login.go#L254) maps values with `_` to `Collation`, and charset names to `Params["charset"]` and canonical default collations (e.g. `utf8mb4_general_ci`). |
+| **Bare Boolean Client Flags** | Option file flags without values (e.g. `compress`, `quick`). | [`parseLine`](./login.go#L446) detects recognized client boolean flags and assigns `"true"`, rejecting unrecognized malformed lines. |
 
 ### 1.5 Performance and Computational Efficiency
 
@@ -132,18 +150,18 @@ The operational life cycle consists of three primary workflows:
 
 ### 2.2 Component Relationships and Code Interfaces
 
-- [`mylogin.go`](./mylogin.go): Entry points for file reading (`Default()`, `Get()`, `Load()`, `ReadResolvedLogin()`), cipher initialization (`cipher()`), serialization (`Encode()`), and deserialization (`Decode()`).
-- [`clientdefaults.go`](./clientdefaults.go): Plaintext option file parser and cascade resolver (`DefaultOptionFile()`, `DefaultClientDefaults()`, `ReadClientDefaults()`).
-- [`defaultoptionfile.go`](./defaultoptionfile.go) / [`defaultoptionfile_windows.go`](./defaultoptionfile_windows.go): Platform-specific resolution for default MySQL plaintext option files (`~/.my.cnf` on POSIX, `%APPDATA%\MySQL\.my.cnf` on Windows).
+- [`mylogin.go`](./mylogin.go): Entry points for file reading (`Default()`, `Get()`, `Load()`, `ReadResolvedLogin()`, `ReadResolvedLoginHierarchy()`), cipher initialization (`cipher()`), serialization (`Encode()`), and deserialization (`Decode()`).
+- [`clientdefaults.go`](./clientdefaults.go): Plaintext option file parser and cascade resolver (`DefaultOptionFile()`, `GlobalOptionFiles()`, `DefaultOptionFiles()`, `DefaultClientDefaults()`, `ReadClientDefaults()`, `ReadClientDefaultsHierarchy()`).
+- [`defaultoptionfile.go`](./defaultoptionfile.go) / [`defaultoptionfile_windows.go`](./defaultoptionfile_windows.go): Platform-specific resolution for default MySQL plaintext option files (`~/.my.cnf` on POSIX, `%APPDATA%\MySQL\.my.cnf` on Windows) and canonical global candidate paths (`/etc/my.cnf`, `%WINDIR%\my.ini`, etc.).
 - [`login.go`](./login.go): Domain model for credentials (`Login`), DSN generator (`FormatDSN()`, `RedactedDSN()`), structured logger integration (`LogValue()`), and SQL driver attachment (`Connector()`, `Open()`).
 - [`login_tls.go`](./login_tls.go): Cryptographic TLS negotiation, custom Root CA cert pool management, peer certificate chain verification, and mutual TLS (mTLS) client certificate loader.
 - [`sections.go`](./sections.go): Collection model (`Sections`, `Section`) representing the configuration file AST. Supports section-level querying, deletion, insertion, deep cloning, and serialization to INI syntax.
 - [`filter.go`](./filter.go): Low-level stream adapter isolating targeted sections during streaming reads.
 - [`cmd/mylogin/main.go`](./cmd/mylogin/main.go): Pure-Go CLI implementing administrative subcommands (`set`, `remove`, `list`) and dump flags (`-json`, `-replay`, `-remove`, `-template`).
-- [`cmd/mylogin-dsn/main.go`](./cmd/mylogin-dsn/main.go): Command-line DSN generation utility.
+- [`cmd/mylogin-dsn/main.go`](./cmd/mylogin-dsn/main.go): Command-line DSN generation utility with `-option-file` and `-global-option-file` support.
 - [`cmd/mylogin-key/main.go`](./cmd/mylogin-key/main.go): Key inspection utility.
-- [`cmd/mylogin-inspect/main.go`](./cmd/mylogin-inspect/main.go): Diagnostic tool inspecting option file discovery and resolved connection keys.
-- [`cmd/mylogin-connect/main.go`](./cmd/mylogin-connect/main.go): Connectivity verification utility.
+- [`cmd/mylogin-inspect/main.go`](./cmd/mylogin-inspect/main.go): Diagnostic tool inspecting option file discovery, resolved connection keys, and cascade hierarchies.
+- [`cmd/mylogin-connect/main.go`](./cmd/mylogin-connect/main.go): Connectivity verification utility testing target and source connections across the hierarchy.
 
 ### 2.3 End-to-End Sequence Diagram
 
@@ -162,8 +180,10 @@ sequenceDiagram
 
     App->>API: mylogin.Get("production")
     activate API
-    API->>FS: Check ~/.my.cnf (Plaintext Client Defaults)
-    FS-->>API: Base [client] Options (or empty if absent)
+    API->>FS: Check Global Files (/etc/my.cnf, etc.)
+    FS-->>API: Global [client] Options (or empty if absent)
+    API->>FS: Check User File (~/.my.cnf)
+    FS-->>API: User [client] Options (or empty if absent)
     API->>FS: os.Stat(~/.mylogin.cnf) (Check Permissions 0600)
     FS-->>API: File Info OK
     API->>FS: os.Open(~/.mylogin.cnf)
@@ -179,15 +199,15 @@ sequenceDiagram
     API->>Parser: Parse(decryptedStream)
     activate Parser
     Parser->>Parser: Line-by-line tokenize sections & options
-    Parser->>Parser: Cascade: .my.cnf [client] -> .mylogin.cnf [client] -> [production]
-    Parser-->>Model: Populate Login Struct
+    Parser->>Parser: 4-Tier Cascade: Global -> User .my.cnf -> .mylogin.cnf [client] -> [production]
+    Parser-->>Model: Populate Login Struct (with Key Normalization & Socket Protection)
     deactivate Parser
     API-->>App: *Login Instance
     deactivate API
 
     App->>Model: login.Open("app_db")
     activate Model
-    Model->>Model: configWithTLS() (Map User, Pass, Host, TLS/CA/mTLS)
+    Model->>Model: configWithTLS() (Map User, Pass, Host, Timeouts, Charset, TLS/CA/mTLS)
     Model->>Driver: mysql.NewConnector(cfg)
     Driver-->>Model: driver.Connector Handle
     Model->>Driver: sql.OpenDB(connector)
