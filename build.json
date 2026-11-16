@@ -1,0 +1,23 @@
+{
+  "name": "mylogin",
+  "version": "1.7.0",
+  "release": "1",
+  "channel": "xg",
+  "entrypoint": "./cmd/mylogin",
+  "version_pkg": "main.version",
+  "build_pkg": "",
+  "summary": "MySQL .mylogin.cnf credential parser, inspector, and DSN generator",
+  "description": "Tool and library for reading, inspecting, and manipulating encrypted MySQL login paths (.mylogin.cnf files) and generating connection DSNs.",
+  "maintainer": "Mis Center <support@criticalsys.net>",
+  "license": "MIT",
+  "url": "https://criticalsys.net",
+  "group": "Applications/Databases",
+  "section": "database",
+  "priority": "optional",
+  "install_path": "/usr/bin",
+  "cgo": false,
+  "history": [
+    "* Wed Oct 13 2026 Mis Center <support@criticalsys.net> - <version>-<release>",
+    "- Packaged to new code release"
+  ]
+}
